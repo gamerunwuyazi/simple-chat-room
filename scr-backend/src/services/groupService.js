@@ -537,9 +537,9 @@ export async function getGroupMembers(req, res) {
     const groupId = req.params.groupId;
 
     const [members] = await pool.execute(`
-      SELECT u.id, u.nickname, u.avatar_url as avatarUrl, gm.is_admin, gm.is_muted, gm.group_nickname
-      FROM scr_group_members gm 
-      JOIN scr_users u ON gm.user_id = u.id 
+      SELECT u.id, u.nickname, u.avatar_url as avatarUrl, gm.is_admin, DATE_FORMAT(gm.is_muted, '%Y-%m-%d %H:%i:%s') AS is_muted, gm.group_nickname
+      FROM scr_group_members gm
+      JOIN scr_users u ON gm.user_id = u.id
       WHERE gm.group_id = ? AND gm.deleted_at IS NULL
     `, [groupId]);
 
@@ -1521,7 +1521,7 @@ export async function muteGroupMember(req, res) {
         // duration 为 0 表示永久禁言
         mutedValue = '9999-12-31 23:59:59';
       } else {
-        // 临时禁言：存储截止时间戳（使用北京时间 UTC+8）
+        // 临时禁言：存储截止时间戳（统一使用 UTC，与运行环境时区无关）
         const now = new Date();
         const mutedUntilDate = new Date(now.getTime() + duration * 60 * 1000);
         
@@ -1541,23 +1541,11 @@ export async function muteGroupMember(req, res) {
           // 超过100年，自动转为永久禁言
           mutedValue = '9999-12-31 23:59:59';
         } else {
-          // 转换为北京时间格式：YYYY-MM-DD HH:mm:ss
-          const beijingTimeStr = mutedUntilDate.toLocaleString('zh-CN', {
-            timeZone: 'Asia/Shanghai',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false
-          });
-          
-          // 格式化为 MySQL DATETIME 格式
-          mutedValue = beijingTimeStr.replace(/(\d{4})\/(\d{2})\/(\d{2})/, '$1-$2-$3');
-          
-          // 最终验证：确保格式化后的时间字符串解析后仍然有效
-          const parsedMutedTime = new Date(mutedValue.replace(' ', 'T'));
+          // 转换为 UTC 格式：YYYY-MM-DD HH:mm:ss（toISOString 恒为 UTC）
+          mutedValue = mutedUntilDate.toISOString().slice(0, 19).replace('T', ' ');
+
+          // 最终验证：按 UTC 解析确保仍然有效
+          const parsedMutedTime = new Date(mutedValue.replace(' ', 'T') + 'Z');
           if (isNaN(parsedMutedTime.getTime()) || parsedMutedTime.getTime() <= now.getTime()) {
             return res.status(500).json({ 
               status: 'error', 
@@ -1590,6 +1578,7 @@ export async function muteGroupMember(req, res) {
       userId: memberId,
       nickname: userInfo[0]?.nickname || '',
       mutedUntil: mutedValue,
+      serverNow: Date.now(),
       isPermanent: !duration || duration <= 0,
       duration: duration
     });
@@ -1598,6 +1587,7 @@ export async function muteGroupMember(req, res) {
     io.to(`user_${memberId}`).emit('member-muted', {
       groupId: groupId,
       mutedUntil: mutedValue,
+      serverNow: Date.now(),
       isPermanent: !duration || duration <= 0,
       duration: duration
     });
@@ -1606,6 +1596,7 @@ export async function muteGroupMember(req, res) {
       status: 'success',
       message: duration > 0 ? `已禁言${duration}分钟` : '已永久禁言',
       mutedUntil: mutedValue,
+      serverNow: Date.now(),
       isPermanent: !duration || duration <= 0
     });
   } catch (err) {
@@ -1727,9 +1718,9 @@ export async function getMuteStatus(req, res) {
 
     // 获取所有成员的禁言状态（优化后的单字段设计）
     const [members] = await pool.execute(`
-      SELECT u.id, u.nickname, gm.is_muted 
-      FROM scr_group_members gm 
-      JOIN scr_users u ON gm.user_id = u.id 
+      SELECT u.id, u.nickname, DATE_FORMAT(gm.is_muted, '%Y-%m-%d %H:%i:%s') AS is_muted
+      FROM scr_group_members gm
+      JOIN scr_users u ON gm.user_id = u.id
       WHERE gm.group_id = ? AND gm.deleted_at IS NULL
     `, [groupId]);
 
@@ -1747,8 +1738,8 @@ export async function getMuteStatus(req, res) {
           isMuted = true;
           isPermanent = true;
         } else {
-          // 临时禁言，检查是否已过期
-          const mutedTime = new Date(mutedValue);
+          // 临时禁言，检查是否已过期（存储为 UTC 时间，显式按 UTC 解析）
+          const mutedTime = new Date(mutedValue.replace(' ', 'T') + 'Z');
           if (!isNaN(mutedTime.getTime())) {
             const now = new Date();
             const diffMs = mutedTime.getTime() - now.getTime();
@@ -1775,6 +1766,7 @@ export async function getMuteStatus(req, res) {
     res.json({
       status: 'success',
       isMuteAll: groupInfo[0].is_mute_all === 1,
+      serverNow: Date.now(),
       members: processedMembers
     });
   } catch (err) {

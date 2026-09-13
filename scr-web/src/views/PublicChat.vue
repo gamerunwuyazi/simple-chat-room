@@ -14,12 +14,15 @@
 
     <div id="messageContainer" ref="messageContainerRef">
       <template v-if="publicStore.publicMessages.length !== 0">
-        <PublicMessageItem
-          v-for="message in publicStore.publicMessages" 
-          :key="message.id"
-          :message="message"
-          :is-own="isOwnMessage(message)"
-        />
+        <template v-for="segment in publicMessageSegments" :key="segment.key">
+          <div v-if="segment.showDivider" class="date-divider">{{ segment.label }}</div>
+          <PublicMessageItem
+            v-for="message in segment.messages"
+            :key="message.id"
+            :message="message"
+            :is-own="isOwnMessage(message)"
+          />
+        </template>
       </template>
       <div v-else class="empty-state" id="emptyState">
         <h3>暂无消息</h3>
@@ -260,7 +263,7 @@ import {
   resetLoadingState,
   updateUnreadCountsDisplay
 } from "@/utils/chat";
-import { clearContentEditable } from "@/utils/chat/message.js";
+import { clearContentEditable, buildDateSegments } from "@/utils/chat/message.js";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
@@ -285,9 +288,9 @@ const friendStore = useFriendStore();
 const unreadStore = useUnreadStore();
 const route = useRoute();
 
-let prevPublicScrollHeight = undefined;
-let prevPublicScrollTop = undefined;
-let isLoadingMoreMessages = false;
+// 按天分组渲染日期分隔标签，避免每条消息都产生一个 v-if 占位节点
+const publicMessageSegments = computed(() => buildDateSegments(publicStore.publicMessages, publicStore.isPublicAllLoaded()));
+
 let scrollingInitialized = { public: false };
 
 const messageInputRef = ref(null);
@@ -325,37 +328,28 @@ function isNearBottom() {
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
 }
 
-function refreshScrollPos() {
-  if (prevPublicScrollHeight === undefined || prevPublicScrollTop === undefined) {
-    return;
-  }
-  
-  nextTick(() => {
-    if (messageContainerRef.value) {
-      const scrollWrap = messageContainerRef.value;
-      const newScrollHeight = scrollWrap.scrollHeight;
-      const offsetTop = newScrollHeight - prevPublicScrollHeight;
-      
-      if (offsetTop !== 0) {
-        const newScrollTop = prevPublicScrollTop + offsetTop;
-        scrollWrap.scrollTop = newScrollTop;
-      }
-      
-      prevPublicScrollHeight = undefined;
-      prevPublicScrollTop = undefined;
-    }
-  });
-}
-
 watch(
   () => publicStore.publicMessages,
-  (newMessages) => {
-    if (isLoadingMoreMessages) {
-      refreshScrollPos();
-      setTimeout(() => {
-        resetLoadingState();
-      }, 100);
-    } else if (newMessages.length > previousPublicMessageLength && !isLoadingMoreMessages) {
+  (newMessages, oldMessages) => {
+    // 加载更多（prepend）：首条消息 id 变化且末条不变，说明上方插入了更早的历史消息
+    const isPrepend = oldMessages && oldMessages.length > 0
+      && newMessages.length > oldMessages.length
+      && String(newMessages[0].id) !== String(oldMessages[0].id)
+      && String(newMessages[newMessages.length - 1].id) === String(oldMessages[oldMessages.length - 1].id);
+    if (isPrepend) {
+      // DOM 更新前捕获当前滚动位置（watch 默认 pre-flush，此时 DOM 还是旧的）
+      const container = messageContainerRef.value;
+      const oldScrollHeight = container ? container.scrollHeight : undefined;
+      const oldScrollTop = container ? container.scrollTop : undefined;
+      // DOM 更新后、浏览器绘制前恢复位置：向上补偿上方新增内容的高度差，
+      // 消除加载更多时顶部内容（含日期分隔）闪现一帧的问题
+      nextTick(() => {
+        const wrap = messageContainerRef.value;
+        if (wrap && oldScrollHeight !== undefined && oldScrollTop !== undefined) {
+          wrap.scrollTop = wrap.scrollHeight - oldScrollHeight + oldScrollTop;
+        }
+      });
+    } else if (newMessages.length > previousPublicMessageLength) {
       if (isNearBottom()) {
         scrollToBottom();
       }
@@ -376,9 +370,6 @@ watch(
     }
     
     if (newPath === '/chat' || newPath === '/chat/') {
-      prevPublicScrollHeight = undefined;
-      prevPublicScrollTop = undefined;
-      isLoadingMoreMessages = false;
       if (scrollingInitialized) {
         scrollingInitialized.public = false;
       }
@@ -422,9 +413,6 @@ watch(
 );
 
 onMounted(() => {
-  prevPublicScrollHeight = undefined;
-  prevPublicScrollTop = undefined;
-  isLoadingMoreMessages = false;
   if (scrollingInitialized) {
     scrollingInitialized.public = false;
   }

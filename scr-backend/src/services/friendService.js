@@ -9,7 +9,7 @@ export async function handleGetFriends(req, res, io) {
       SELECT cu.id, cu.nickname, cu.username, cu.gender, cu.avatar_url, cf.status, cf.remark, cf.is_disturb
       FROM scr_friends cf
       JOIN scr_users cu ON cf.friend_id = cu.id
-      WHERE cf.user_id = ? AND cf.status IN (1, 0, 5, 6, 10, 11)
+      WHERE cf.user_id = ? AND cf.status IN (1, 0, 4, 5, 6, 10, 11)
       ORDER BY cf.id DESC
     `, [userId]);
 
@@ -1049,6 +1049,13 @@ export async function handleAddFriend(req, res, io) {
       throw err;
     }
   } catch (err) {
+    // 并发重复提交会触发 scr_friends.unique_friendship 唯一键冲突：
+    // SELECT 检查与 INSERT 之间存在竞态窗口，此时对方请求已写入行，
+    // 重试一次即可命中 UPDATE 分支正常完成添加
+    if (err && err.code === 'ER_DUP_ENTRY' && !req.__addFriendRetried) {
+      req.__addFriendRetried = true;
+      return handleAddFriend(req, res, io);
+    }
     console.error('添加好友失败:', err.message);
     res.status(500).json({ status: 'error', message: '添加好友失败' });
   }

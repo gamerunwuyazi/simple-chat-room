@@ -93,7 +93,6 @@ app.use(validateIPAndSession);
 
 // API 请求日志中间件（记录到 scr_api_logs 表，异步非阻塞）
 app.use((req, res, next) => {
-  const startTime = Date.now();
   res.on('finish', async () => {
     if (req.path.startsWith('/api/')) {
       const clientIP = getClientIP(req);
@@ -487,18 +486,54 @@ async function getOnlineUserCount() {
   }
 }
 
+// 定时/启动清理任务的集群单实例执行封装。
+// PM2 集群下每个 worker 都会注册同样的定时器，若不加控制会所有实例同时执行清理，
+// 造成重复扫描、重复删除和日志刷屏。用 Redis SETNX 锁保证同一时刻只有一个实例执行：
+// - 锁按任务名隔离（scr:cron-lock:<taskName>），不同任务互不影响
+// - TTL 是崩溃兜底：持锁实例中途崩溃后锁自动过期，任务不会被永久阻塞
+// - 正常执行完立即用 Lua 比较删除释放锁（仅持锁者可删，防止任务超过 TTL 后
+//   误删已易主的新锁），保证下一个执行周期所有实例重新公平竞争
+async function runOnOneInstance(taskName, ttlSeconds, task) {
+  const lockKey = `scr:cron-lock:${taskName}`;
+  const lockToken = `${hostname()}:${process.pid}`;
+  let acquired = null;
+  try {
+    acquired = await redisClient.set(lockKey, lockToken, { NX: true, EX: ttlSeconds });
+  } catch (err) {
+    // Redis 不可用时退化为各实例都执行：清理任务均为幂等操作，重复执行无害，
+    // 不应因锁服务故障而中断清理
+    console.warn(`⚠️ 定时任务 ${taskName} 获取分布式锁失败，本实例直接执行: ${err.message}`);
+    await task();
+    return true;
+  }
+  if (acquired !== 'OK') return false;
+  try {
+    await task();
+  } finally {
+    await redisClient
+      .eval(
+        `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end`,
+        { keys: [lockKey], arguments: [lockToken] }
+      )
+      .catch(() => {});
+  }
+  return true;
+}
+
 const PORT = serverConfig.port;
 
 async function startServer() {
   try {
-    // 每天凌晨2点：清理过期文件和过期会话
+    // 每天凌晨2点：清理过期文件和过期会话（集群单实例执行）
     schedule.scheduleJob(cronConfig.cleanupSchedule, async () => {
-      await cleanExpiredFiles();
-      await cleanupExpiredSessions();
+      await runOnOneInstance('cleanup-daily', 3600, async () => {
+        await cleanExpiredFiles();
+        await cleanupExpiredSessions();
+      });
     });
 
-    // 每分钟检查一次 API 日志 / Socket 事件日志表大小，超阈值分块清理
-    schedule.scheduleJob('* * * * *', cleanupLogs);
+    // 每分钟检查一次 API 日志 / Socket 事件日志表大小，超阈值分块清理（集群单实例执行）
+    schedule.scheduleJob('* * * * *', () => runOnOneInstance('cleanup-logs', 50, cleanupLogs));
 
     console.log(`
 __  ___/__(_)______ ______________  /____     _________  /_______ __  /_   __________________________ ___ 
@@ -510,14 +545,19 @@ ____/ /_  / _  / / / / /_  /_/ /  / /  __/    / /__ _  / / / /_/ // /_     _  / 
 
     console.log('⏰ 已设置定时任务：每天凌晨2点清理过期文件和过期会话；每分钟检查一次日志表');
 
-    cleanExpiredFiles();
-    cleanupExpiredSessions();
+    // 启动即清理一次过期文件/会话（集群单实例执行，TTL 5 分钟覆盖 PM2 重启窗口，
+    // 正常完成后立即释放，滚动重启后的新 worker 仍可重新清理）
+    runOnOneInstance('startup-cleanup', 300, async () => {
+      await cleanExpiredFiles();
+      await cleanupExpiredSessions();
+    });
 
     await initializeDatabase();
     await syncBannedIPsToRedis();
 
-    // 启动时立即清理一次日志表（避免上次运行残留的超大日志表拖慢请求）
-    cleanupLogs();
+    // 启动时立即清理一次日志表（避免上次运行残留的超大日志表拖慢请求），
+    // 与每分钟的定时日志清理共用同一把锁，集群内只跑一个实例
+    runOnOneInstance('cleanup-logs', 50, cleanupLogs);
 
     // 集群安全：只让第一个启动的 worker 清空在线状态。
     // PM2 集群下多个 worker 会同时执行到这里，若每个都 del，后启动的 worker 会

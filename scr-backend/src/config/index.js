@@ -56,6 +56,15 @@ export const dbConfig = {
   // 连接耗尽时最多排队的查询数，超过直接报错快速失败（避免无限排队拖垮所有请求）
   // 压测实测 50 连接 + 1000 排队会被瞬间打满报 "Queue limit reached"，扩连接后同步提高排队上限
   queueLimit: parseInt(process.env.DB_QUEUE_LIMIT) || 3000,
+  // 空闲连接管理：主线程调用频繁、无需健康探测，仅靠客户端主动断开防止连接长期闲置腐化。
+  // 注意：mysql2 仅在 maxIdle < connectionLimit 时才启动空闲回收器（base/pool.js），
+  // maxIdle 只负责「空闲数超过即裁剪」，超过 idleTimeout 的连接无论数量都会被关闭
+  maxIdle: parseInt(process.env.DB_MAX_IDLE) || 100,
+  // 空闲 1 小时后由客户端主动断开（远早于 MySQL wait_timeout 默认 8h，杜绝僵尸连接）
+  idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT) || 3600000,
+  // 连接超时调快（默认 10s）：MySQL 不可达时新连接 3s 即失败，
+  // 避免 HTTP 请求在建立连接阶段长时间挂起后才报错
+  connectTimeout: parseInt(process.env.DB_CONNECT_TIMEOUT) || 3000,
   enableKeepAlive: true,
   keepAliveInitialDelay: 0
 };

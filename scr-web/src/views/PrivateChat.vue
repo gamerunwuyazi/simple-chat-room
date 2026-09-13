@@ -38,12 +38,15 @@
 
       <div id="privateMessageContainer" ref="privateMessageContainerRef">
         <template v-if="privateMessages.length !== 0">
-          <PrivateMessageItem 
-            v-for="message in privateMessages" 
-            :key="message.id"
-            :message="message"
-            :is-own="isOwnMessage(message)"
-          />
+          <template v-for="segment in privateMessageSegments" :key="segment.key">
+            <div v-if="segment.showDivider" class="date-divider">{{ segment.label }}</div>
+            <PrivateMessageItem
+              v-for="message in segment.messages"
+              :key="message.id"
+              :message="message"
+              :is-own="isOwnMessage(message)"
+            />
+          </template>
         </template>
         <div v-else class="empty-state">
           <h3>暂无私信</h3>
@@ -201,6 +204,7 @@ import {
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
+import { buildDateSegments } from "@/utils/chat/message.js";
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -222,10 +226,7 @@ const groupStore = useGroupStore();
 const publicStore = usePublicStore();
 const SERVER_URL = baseStore.SERVER_URL || import.meta.env.VITE_SERVER_URL || '';
 
-let prevPrivateScrollHeight = undefined;
-let prevPrivateScrollTop = undefined;
 let restoringPrivateDraft = false;
-let isLoadingMoreMessages = false;
 let scrollingInitialized = { private: false };
 let privateChatAllLoaded = {};
 
@@ -248,6 +249,9 @@ const privateMessages = computed(() => {
   return friendStore.privateMessages[sessionStore.currentPrivateChatUserId] || [];
 });
 
+// 按天分组渲染日期分隔标签，避免每条消息都产生一个 v-if 占位节点
+const privateMessageSegments = computed(() => buildDateSegments(privateMessages.value, friendStore.isPrivateAllLoaded(sessionStore.currentPrivateChatUserId)));
+
 function isOwnMessage(message) {
   if (!currentUserId.value) return false;
   return String(message.userId) === String(currentUserId.value) || 
@@ -268,28 +272,6 @@ function isNearBottom() {
   const container = privateMessageContainerRef.value;
   const threshold = 150;
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
-}
-
-function refreshScrollPos() {
-  if (prevPrivateScrollHeight === undefined || prevPrivateScrollTop === undefined) {
-    return;
-  }
-  
-  nextTick(() => {
-    if (privateMessageContainerRef.value) {
-      const scrollWrap = privateMessageContainerRef.value;
-      const newScrollHeight = scrollWrap.scrollHeight;
-      const offsetTop = newScrollHeight - prevPrivateScrollHeight;
-      
-      if (offsetTop !== 0) {
-        const newScrollTop = prevPrivateScrollTop + offsetTop;
-        scrollWrap.scrollTop = newScrollTop;
-      }
-      
-      prevPrivateScrollHeight = undefined;
-      prevPrivateScrollTop = undefined;
-    }
-  });
 }
 
 const isPrivateChatVisible = ref(false);
@@ -855,9 +837,6 @@ watch(
   () => sessionStore.currentPrivateChatUserId,
   (newUserId, oldUserId) => {
     if (newUserId && newUserId !== oldUserId) {
-      prevPrivateScrollHeight = undefined;
-      prevPrivateScrollTop = undefined;
-      isLoadingMoreMessages = false;
       if (scrollingInitialized) {
         scrollingInitialized.private = false;
       }
@@ -892,13 +871,25 @@ watch(
 
 watch(
   () => privateMessages.value,
-  (newMessages) => {
-    if (isLoadingMoreMessages) {
-      refreshScrollPos();
-      setTimeout(() => {
-        resetLoadingState();
-      }, 100);
-    } else if (newMessages.length > previousPrivateMessageLength && !isLoadingMoreMessages) {
+  (newMessages, oldMessages) => {
+    // 加载更多（prepend）：首条消息 id 变化且末条不变，说明上方插入了更早的历史消息
+    const isPrepend = oldMessages && oldMessages.length > 0
+      && newMessages.length > oldMessages.length
+      && String(newMessages[0].id) !== String(oldMessages[0].id)
+      && String(newMessages[newMessages.length - 1].id) === String(oldMessages[oldMessages.length - 1].id);
+    if (isPrepend) {
+      // DOM 更新前捕获当前滚动位置（watch 默认 pre-flush，此时 DOM 还是旧的）
+      const container = privateMessageContainerRef.value;
+      const oldScrollHeight = container ? container.scrollHeight : undefined;
+      const oldScrollTop = container ? container.scrollTop : undefined;
+      // DOM 更新后、浏览器绘制前恢复位置，消除加载更多时顶部内容闪现一帧的问题
+      nextTick(() => {
+        const wrap = privateMessageContainerRef.value;
+        if (wrap && oldScrollHeight !== undefined && oldScrollTop !== undefined) {
+          wrap.scrollTop = wrap.scrollHeight - oldScrollHeight + oldScrollTop;
+        }
+      });
+    } else if (newMessages.length > previousPrivateMessageLength) {
       if (isNearBottom()) {
         scrollToBottom();
       }
@@ -924,9 +915,6 @@ watch(
     }
     
     if (newPath.startsWith('/chat/private')) {
-      prevPrivateScrollHeight = undefined;
-      prevPrivateScrollTop = undefined;
-      isLoadingMoreMessages = false;
       if (scrollingInitialized) {
         scrollingInitialized.private = false;
       }

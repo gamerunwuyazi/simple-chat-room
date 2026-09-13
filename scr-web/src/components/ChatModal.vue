@@ -1124,6 +1124,9 @@ const loadingSendGroupCardList = ref(false);
 const groupMembers = ref([]);
 const loadingMembers = ref(false);
 const currentTime = ref(Date.now()); // 用于触发 computed 重新计算的时间戳
+// 服务器时钟偏移（serverNow - 客户端now），禁言倒计时用它校准，
+// 避免客户端时钟偏差导致徽标提前归零但服务器仍在禁言
+const serverTimeOffset = ref(0);
 
 // 好友申请留言对话框
 const friendRequestDialogVisible = ref(false);
@@ -1793,13 +1796,17 @@ async function loadGroupMembers(groupId) {
     const data = response.data;
     if (data.members) {
       // 1. 更新本地状态（用于模态框显示）
-      groupMembers.value = data.members.map(member => ({
-        ...member,
-        nickname: member.nickname || member.username || '',
-        is_muted: false,
-        muted_until: null,
-        isPermanentMuted: false
-      }));
+      // 保留现有禁言状态，等待 loadGroupMuteStatus 返回权威数据，避免刷新期间徽标闪烁
+      groupMembers.value = data.members.map(member => {
+        const existing = groupMembers.value.find(m => String(m.id) === String(member.id));
+        return {
+          ...member,
+          nickname: member.nickname || member.username || '',
+          is_muted: existing ? existing.is_muted : false,
+          muted_until: existing ? existing.muted_until : null,
+          isPermanentMuted: existing ? existing.isPermanentMuted : false
+        };
+      });
       
       // 2. 同步更新 groupStore.currentGroupMembers（确保数据一致性）
       
@@ -1864,7 +1871,8 @@ const sortedGroupMembers = computed(() => {
 // 计算每个成员的禁言状态显示
 const membersWithMuteStatus = computed(() => {
   // 访问 currentTime 来建立依赖关系，确保时间变化时重新计算
-  const now = currentTime.value;
+  // 加上服务器时钟偏移，使倒计时基于服务器时间
+  const now = currentTime.value + serverTimeOffset.value;
   
   return sortedGroupMembers.value.map(member => {
     // 首先检查是否有禁言标记
@@ -1904,7 +1912,7 @@ const membersWithMuteStatus = computed(() => {
     }
     
     // 临时禁言
-    const mutedTime = new Date(member.muted_until);
+    const mutedTime = parseMuteTime(member.muted_until);
     const diffMs = mutedTime.getTime() - now;
     
     // 已过期
@@ -2514,13 +2522,30 @@ async function handleMuteGroupMember(member) {
     const groupId = modalStore.modalData.groupInfo.id;
     const response = await muteGroupMember(Number(groupId), Number(member.id), duration);
     const data = response.data;
+    // 用服务器时间校准时钟偏移，保证倒计时与服务器解禁时刻一致
+    if (typeof data.serverNow === 'number') {
+      serverTimeOffset.value = data.serverNow - Date.now();
+    }
     if (duration > 0) {
-      const mutedUntil = new Date(data.mutedUntil);
-      const timeStr = formatMuteTime(mutedUntil);
+      const mutedUntil = parseMuteTime(data.mutedUntil);
+      const timeStr = formatMuteTime(mutedUntil, Date.now() + serverTimeOffset.value);
       toast.success(`已禁言 ${member.nickname || member.username}，解禁时间：${timeStr}`);
     } else {
       toast.success(`已永久禁言 ${member.nickname || member.username}`);
     }
+    // 立即用服务器返回的截止时间更新本地状态并重启倒计时，
+    // 避免等待成员列表重新拉取期间徽标显示陈旧时间或冻结
+    const memberIndex = groupMembers.value.findIndex(m => String(m.id) === String(member.id));
+    if (memberIndex !== -1) {
+      groupMembers.value[memberIndex] = {
+        ...groupMembers.value[memberIndex],
+        is_muted: true,
+        muted_until: data.mutedUntil,
+        isPermanentMuted: !duration || duration <= 0
+      };
+    }
+    currentTime.value = Date.now();
+    startMuteTimer();
     loadGroupMembers(groupId);
   } catch (error) {
     console.error('禁言成员失败:', error);
@@ -2742,12 +2767,11 @@ async function showCustomMuteTimePicker(member) {
   });
 }
 
-// 格式化禁言时间显示
-function formatMuteTime(dateTime) {
+// 格式化禁言时间显示（nowMs 可选：传入服务器校准时间戳）
+function formatMuteTime(dateTime, nowMs = Date.now()) {
   if (!dateTime) return '';
-  
-  const now = new Date();
-  const diffMs = dateTime.getTime() - now.getTime();
+
+  const diffMs = dateTime.getTime() - nowMs;
   const diffSeconds = Math.ceil(diffMs / 1000);
   
   // 检查是否已过期（负数或零）
@@ -2829,11 +2853,23 @@ function formatMuteTimeWithNow(dateTime, now) {
   }
 }
 
+// 解析禁言时间：后端统一存储 UTC（YYYY-MM-DD HH:mm:ss），显式按 UTC 解析，与浏览器时区无关
+function parseMuteTime(value) {
+  if (!value) return null;
+  const str = String(value);
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/);
+  if (m) {
+    return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 // 检查是否为永久禁言（超过100年或存储值为9999年）
 function isPermanentMute(mutedUntil) {
   if (!mutedUntil) return false;
-  
-  const mutedTime = new Date(mutedUntil);
+
+  const mutedTime = parseMuteTime(mutedUntil);
   const now = new Date();
   const diffMs = mutedTime.getTime() - now.getTime();
   const diffYears = diffMs / (365.25 * 24 * 60 * 60 * 1000);
@@ -2853,16 +2889,16 @@ function getMuteStatusText(member) {
   
   // 如果有截止时间，检查是否已过期
   if (member.muted_until) {
-    const mutedTime = new Date(member.muted_until);
-    const now = new Date();
-    const diffMs = mutedTime.getTime() - now.getTime();
+    const mutedTime = parseMuteTime(member.muted_until);
+    // 使用服务器校准时间判断过期
+    const diffMs = mutedTime.getTime() - (Date.now() + serverTimeOffset.value);
     
     // 如果已过期，返回空文本（这样禁言标识不会显示，按钮会显示为"禁言"）
     if (diffMs <= 0) {
       return '';
     }
     
-    const timeStr = formatMuteTime(mutedTime);
+    const timeStr = formatMuteTime(mutedTime, Date.now() + serverTimeOffset.value);
     return `⏰ ${timeStr}`;
   }
   
@@ -2878,7 +2914,7 @@ function getMuteStatusTooltip(member) {
   }
   
   if (member.muted_until) {
-    const mutedTime = new Date(member.muted_until);
+    const mutedTime = parseMuteTime(member.muted_until);
     const formattedTime = mutedTime.toLocaleString('zh-CN', {
       year: 'numeric',
       month: '2-digit',
@@ -2923,6 +2959,11 @@ async function loadGroupMuteStatus(groupId) {
     const response = await getGroupMuteStatus(groupId);
     const data = response.data;
     isMuteAllEnabled.value = data.isMuteAll;
+
+    // 用服务器时间校准时钟偏移，保证徽标归零时刻与服务器解禁时刻一致
+    if (typeof data.serverNow === 'number') {
+      serverTimeOffset.value = data.serverNow - Date.now();
+    }
       
     // 更新成员的禁言状态
     if (groupMembers.value.length > 0 && data.members) {
@@ -2936,9 +2977,9 @@ async function loadGroupMuteStatus(groupId) {
           
           // 前端二次验证：检查临时禁言是否已过期（防止后端漏检或时区差异）
           if (!autoDetectedPermanent && !muteInfo.isPermanent && mutedUntil) {
-            const mutedTime = new Date(mutedUntil);
-            const now = new Date();
-            const diffMs = mutedTime.getTime() - now.getTime();
+            const mutedTime = parseMuteTime(mutedUntil);
+            // 使用服务器校准时间判断过期
+            const diffMs = mutedTime.getTime() - (Date.now() + serverTimeOffset.value);
             
             // 如果已过期，返回未禁言状态
             if (diffMs <= 0) {
@@ -2965,6 +3006,11 @@ async function loadGroupMuteStatus(groupId) {
           isPermanentMuted: false
         };
       });
+
+      // 立即刷新当前时间并切回秒级倒计时节奏，
+      // 否则 computed 会使用陈旧的 currentTime，徽标剩余时间偏大且冻结到下一次 tick
+      currentTime.value = Date.now();
+      startMuteTimer();
     }
   } catch (error) {
     console.error('获取禁言状态失败:', error);
@@ -3578,8 +3624,9 @@ async function handleContextAction(action) {
 
 function updateMuteCountdowns() {
   if (!groupMembers.value || groupMembers.value.length === 0) return false;
-  
-  const now = Date.now();
+
+  // 使用服务器校准时间，保证到期判断与后端解禁时刻一致
+  const now = Date.now() + serverTimeOffset.value;
   let hasActiveMutes = false;
   
   // 检查是否有成员禁言已过期，如果有则更新状态
@@ -3593,7 +3640,7 @@ function updateMuteCountdowns() {
       return member;
     }
     
-    const mutedTime = new Date(member.muted_until);
+    const mutedTime = parseMuteTime(member.muted_until);
     const diffMs = mutedTime.getTime() - now;
     
     if (diffMs <= 0) {
@@ -3616,9 +3663,9 @@ function updateMuteCountdowns() {
     groupMembers.value = updatedMembers;
   }
   
-  // 更新时间戳，触发 computed 重新计算
-  currentTime.value = now;
-  
+  // 存原始本机时间戳（serverTimeOffset 由各消费处自行加一次，此处不能预加，否则偏移会被重复计算）
+  currentTime.value = Date.now();
+
   return hasActiveMutes;
 }
 

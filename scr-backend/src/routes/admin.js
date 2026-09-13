@@ -41,12 +41,13 @@ export function setupRoutes(app, io, broadcastProducer) {
       };
 
       if (ipAddress) {
+        // 优先写 Redis（封禁检查全部读 Redis），随后落库持久化
+        await redisClient.hSet('scr:banned_ips', ipAddress, JSON.stringify(banData));
+
         await pool.execute(
           'INSERT INTO scr_banned_ips (ip_address, user_id, reason, expires_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE reason = VALUES(reason), expires_at = VALUES(expires_at)',
           [ipAddress, userId || null, reason || '违反使用规则', expiresDate]
         );
-
-        await redisClient.hSet('scr:banned_ips', ipAddress, JSON.stringify(banData));
 
         io.to(`ip_${ipAddress}`).emit('ip-banned', {
           ipAddress: ipAddress,
@@ -124,14 +125,15 @@ export function setupRoutes(app, io, broadcastProducer) {
       if (userId) {
         const userIdStr = String(userId);
 
+        // 优先写 Redis（封禁检查全部读 Redis），随后落库持久化
+        await redisClient.hSet('scr:banned_users', userIdStr, JSON.stringify(banData));
+
         if (!ipAddress) {
           await pool.execute(
             'INSERT INTO scr_banned_ips (ip_address, user_id, reason, expires_at) VALUES (?, ?, ?, ?)',
             [null, userId, reason || '违反使用规则', expiresDate]
           );
         }
-
-        await redisClient.hSet('scr:banned_users', userIdStr, JSON.stringify(banData));
 
         // 封禁即注销该用户的登录凭据：删除 Redis 访问 token 与数据库中的 refresh token
         await redisClient.del(`scr:token:${userIdStr}`);
@@ -224,30 +226,31 @@ export function setupRoutes(app, io, broadcastProducer) {
 
       if (ipAddress && userId) {
         // 同时提供 IP 和用户ID 时，只删除同时匹配的记录
+        // 优先删 Redis（封禁检查全部读 Redis），随后清理数据库
+        await redisClient.hDel('scr:banned_ips', ipAddress);
+        await redisClient.hDel('scr:banned_users', String(userId));
+
         await pool.execute(
           'DELETE FROM scr_banned_ips WHERE ip_address = ? AND user_id = ?',
           [ipAddress, userId]
         );
-
-        await redisClient.hDel('scr:banned_ips', ipAddress);
-        await redisClient.hDel('scr:banned_users', String(userId));
       } else {
         if (ipAddress) {
+          await redisClient.hDel('scr:banned_ips', ipAddress);
+
           await pool.execute(
             'DELETE FROM scr_banned_ips WHERE ip_address = ?',
             [ipAddress]
           );
-
-          await redisClient.hDel('scr:banned_ips', ipAddress);
         }
 
         if (userId) {
+          await redisClient.hDel('scr:banned_users', String(userId));
+
           await pool.execute(
             'DELETE FROM scr_banned_ips WHERE user_id = ?',
             [userId]
           );
-
-          await redisClient.hDel('scr:banned_users', String(userId));
         }
       }
 

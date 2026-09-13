@@ -22,11 +22,54 @@ function getDb() {
       database: dbConfig.database,
       // 2 个 worker × 15 = 30 连接；配合主池 150，远低于 MySQL max_connections(500)
       connectionLimit: 15,
+      // 空闲连接管理：mysql2 仅在 maxIdle < connectionLimit 时才启动空闲回收器，
+      // 空闲 3 小时后由客户端主动断开（早于 MySQL wait_timeout 默认 8h），防止连接腐化
+      maxIdle: 10,
+      idleTimeout: 3 * 60 * 60 * 1000,
+      // 连接超时调快（默认 10s）：MySQL 不可达时新连接 3s 即失败，
+      // 配合任务层重建重试（约 3s+3s），尽快回退主线程，避免 HTTP 被拖到超时
+      connectTimeout: 3000,
       enableKeepAlive: true,
       keepAliveInitialDelay: 0
     });
   }
   return dbPromise;
+}
+
+const CONNECTION_PROBE_TIMEOUT_MS = 40;
+
+function withinTimeout(promise, timeout, message) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeout);
+      if (timer.unref) timer.unref();
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+
+// 每项任务先取得一条连接并在同一条连接上完成 40ms 健康探测。
+// getConnection 不限时：池空闲连接被 idleTimeout 回收后池为空，mysql2 会自动新建连接
+// （新连接不存在僵尸风险，建连耗时由 connectTimeout 兜底）；40ms 探测只针对池中取出的旧连接，
+// 用于识别已被服务端静默关闭的僵尸连接。
+async function acquireHealthyConnection() {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const conn = await getDb().getConnection();
+    try {
+      await withinTimeout(
+        conn.query({ sql: 'SELECT 1', timeout: CONNECTION_PROBE_TIMEOUT_MS }),
+        CONNECTION_PROBE_TIMEOUT_MS,
+        'MySQL 连接健康探测超时'
+      );
+      return conn;
+    } catch (err) {
+      conn.destroy(); // 销毁坏连接（自动移出池），池空后下次 getConnection 自动新建
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 function getRedis() {
@@ -43,8 +86,7 @@ function getRedis() {
 }
 
 // ===== getGlobalMessages =====
-async function runGetGlobalMessages({ limit, olderThan, userId }) {
-  const db = await getDb();
+async function runGetGlobalMessages({ limit, olderThan, userId, db }) {
   const redis = await getRedis();
 
   let query = 'SELECT m.id, m.user_id as userId, u.nickname, u.avatar_url as avatarUrl,'
@@ -146,8 +188,7 @@ async function runGetGlobalMessages({ limit, olderThan, userId }) {
 }
 
 // ===== getGroupMessages =====
-async function runGetGroupMessages({ groupId, limit, olderThan, userId }) {
-  const db = await getDb();
+async function runGetGroupMessages({ groupId, limit, olderThan, userId, db }) {
   const redis = await getRedis();
 
   let safeGroupId = 0;
@@ -290,8 +331,7 @@ async function runGetGroupMessages({ groupId, limit, olderThan, userId }) {
 }
 
 // ===== getOfflineMessages =====
-async function runGetOfflineMessages({ userId, publicAndGroupMinId, privateMinId }) {
-  const db = await getDb();
+async function runGetOfflineMessages({ userId, publicAndGroupMinId, privateMinId, db }) {
   const redis = await getRedis();
 
   const threeMonthsAgo = new Date();
@@ -525,25 +565,86 @@ async function runGetOfflineMessages({ userId, publicAndGroupMinId, privateMinId
   };
 }
 
-// 任务分发
-parentPort.on('message', async (task) => {
+// 任务分发：探测通过的连接仅供当前任务使用，完成后无条件归还池。
+async function runTask(task, onReady) {
+  const db = await acquireHealthyConnection();
+  onReady();
   try {
-    let result;
     switch (task.type) {
       case 'getGlobalMessages':
-        result = await runGetGlobalMessages(task);
-        break;
+        return await runGetGlobalMessages({ ...task, db });
       case 'getGroupMessages':
-        result = await runGetGroupMessages(task);
-        break;
+        return await runGetGroupMessages({ ...task, db });
       case 'getOfflineMessages':
-        result = await runGetOfflineMessages(task);
-        break;
+        return await runGetOfflineMessages({ ...task, db });
       default:
         throw new Error('未知任务类型: ' + task.type);
     }
+  } finally {
+    db.release();
+  }
+}
+
+// 连接级错误：连接已被服务端关闭（wait_timeout/重启/网络中断）或健康探测超时。
+function isConnectionError(err) {
+  const text = `${err?.code || ''} ${err?.message || ''}`;
+  return /健康探测超时|closed state|PROTOCOL_CONNECTION_LOST|PROTOCOL_SEQUENCE_TIMEOUT|ECONNRESET|EPIPE|ETIMEDOUT|ER_SERVER_LOST/i.test(text);
+}
+
+function resetDb() {
+  const pool = dbPromise;
+  dbPromise = null;
+  if (pool) {
+    pool.end().catch(() => {});
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Worker 只有完成一次真实 MySQL 健康探测后才会被主线程纳入调度。
+async function announceWhenHealthy() {
+  while (true) {
+    try {
+      const db = await acquireHealthyConnection();
+      db.release();
+      parentPort.postMessage({ workerReady: true });
+      return;
+    } catch {
+      resetDb();
+      await sleep(100);
+    }
+  }
+}
+
+announceWhenHealthy();
+
+parentPort.on('message', async (task) => {
+  try {
+    let result;
+    let readySent = false;
+    const onReady = () => {
+      if (!readySent) {
+        readySent = true;
+        parentPort.postMessage({ id: task.id, ready: true });
+      }
+    };
+    try {
+      result = await runTask(task, onReady);
+    } catch (err) {
+      if (!isConnectionError(err) || readySent) throw err;
+      // 首次连接探测失败：丢弃旧池后重试一次；若仍未 ready，主线程会在 45ms 熔断此 worker。
+      resetDb();
+      result = await runTask(task, onReady);
+    }
     parentPort.postMessage({ id: task.id, ok: true, result });
   } catch (err) {
-    parentPort.postMessage({ id: task.id, ok: false, error: { message: err.message } });
+    parentPort.postMessage({
+      id: task.id,
+      ok: false,
+      connectionError: isConnectionError(err),
+      error: { message: err.message }
+    });
   }
 });

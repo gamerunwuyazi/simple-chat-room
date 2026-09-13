@@ -87,42 +87,74 @@ async function checkRateLimit(userId) {
   }, { allowed: true });
 }
 
+// 解析 Redis 中的封禁条目（isIPBanned/isUserBanned 共用）
+function parseBanEntry(banDataStr) {
+  if (!banDataStr) {
+    return { isBanned: false, reason: null, remainingTime: null };
+  }
+
+  const banData = JSON.parse(banDataStr);
+
+  if (banData.expires_at) {
+    const expireDate = new Date(banData.expires_at);
+    const now = new Date();
+
+    if (expireDate <= now) {
+      return { isBanned: false, expired: true, reason: null, remainingTime: null, expireDate };
+    }
+
+    const diff = expireDate - now;
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    return {
+      isBanned: true,
+      reason: banData.reason || '未知原因',
+      remainingTime: { totalSeconds: Math.ceil(diff / 1000), days, hours, minutes }
+    };
+  }
+
+  return { isBanned: true, reason: banData.reason || '永久封禁', remainingTime: null };
+}
+
 async function isIPBanned(ip) {
   return safeRedisExecute(async (client) => {
     const banDataStr = await client.hGet('scr:banned_ips', ip);
 
-    if (banDataStr) {
-      const banData = JSON.parse(banDataStr);
+    const result = parseBanEntry(banDataStr);
 
-      if (banData.expires_at) {
-        const expireDate = new Date(banData.expires_at);
-        const now = new Date();
-
-        if (expireDate <= now) {
-          await client.hDel('scr:banned_ips', ip);
-          await pool.execute(
-            'DELETE FROM scr_banned_ips WHERE ip_address = ? AND expires_at IS NOT NULL AND expires_at <= NOW()',
-            [ip]
-          );
-          return { isBanned: false, reason: null, remainingTime: null };
-        }
-
-        const diff = expireDate - now;
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-        return {
-          isBanned: true,
-          reason: banData.reason || '未知原因',
-          remainingTime: { totalSeconds: Math.ceil(diff / 1000), days, hours, minutes }
-        };
-      }
-
-      return { isBanned: true, reason: banData.reason || '永久封禁', remainingTime: null };
+    // 已过期的封禁条目：从 Redis 与 MySQL 中同步清除
+    if (banDataStr && result.expired) {
+      await client.hDel('scr:banned_ips', ip);
+      await pool.execute(
+        'DELETE FROM scr_banned_ips WHERE ip_address = ? AND expires_at IS NOT NULL AND expires_at <= NOW()',
+        [ip]
+      );
+      return { isBanned: false, reason: null, remainingTime: null };
     }
 
-    return { isBanned: false, reason: null, remainingTime: null };
+    return result;
+  }, { isBanned: false, reason: null, remainingTime: null });
+}
+
+async function isUserBanned(userId) {
+  return safeRedisExecute(async (client) => {
+    const banDataStr = await client.hGet('scr:banned_users', String(userId));
+
+    const result = parseBanEntry(banDataStr);
+
+    // 已过期的封禁条目：从 Redis 与 MySQL 中同步清除
+    if (banDataStr && result.expired) {
+      await client.hDel('scr:banned_users', String(userId));
+      await pool.execute(
+        'DELETE FROM scr_banned_ips WHERE user_id = ? AND expires_at IS NOT NULL AND expires_at <= NOW()',
+        [userId]
+      );
+      return { isBanned: false, reason: null, remainingTime: null };
+    }
+
+    return result;
   }, { isBanned: false, reason: null, remainingTime: null });
 }
 
@@ -321,6 +353,7 @@ export {
   checkRateLimit,
   getClientIP,
   isIPBanned,
+  isUserBanned,
   validateUserSession,
   getUserSession,
   validateIP,

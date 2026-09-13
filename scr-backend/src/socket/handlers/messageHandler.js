@@ -7,7 +7,8 @@ function checkIfUserMuted(isMutedValue) {
   const result = {
     muted: false,
     permanent: false,
-    remainingMinutes: 0
+    remainingMinutes: 0,
+    remainingSeconds: 0
   };
   
   // 情况1: NULL - 未禁言
@@ -38,25 +39,30 @@ function checkIfUserMuted(isMutedValue) {
   // 情况4: 解析为日期时间（支持多种格式）
   let mutedTime;
   
-  // 尝试解析MySQL DATETIME格式: "2026-05-13 19:35:15"
+  // 尝试解析MySQL DATETIME格式: "2026-05-13 19:35:15"（存储为 UTC，显式按 UTC 解析）
   const mysqlDateTimeMatch = valueStr.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/);
   if (mysqlDateTimeMatch) {
     const [, year, month, day, hour, minute, second] = mysqlDateTimeMatch;
     mutedTime = new Date(
-      parseInt(year), 
-      parseInt(month) - 1, 
-      parseInt(day),
-      parseInt(hour), 
-      parseInt(minute), 
-      parseInt(second)
+      Date.UTC(
+        parseInt(year),
+        parseInt(month) - 1,
+        parseInt(day),
+        parseInt(hour),
+        parseInt(minute),
+        parseInt(second)
+      )
     );
+  } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(valueStr)) {
+    // 无时区的 ISO 格式同样按 UTC 解析
+    mutedTime = new Date(valueStr + 'Z');
   } else {
-    // 尝试ISO格式或其他格式
+    // 尝试ISO格式或其他格式（带时区标识的可直接解析）
     mutedTime = new Date(valueStr);
   }
-  
+
   if (!isNaN(mutedTime.getTime())) {
-    // 获取当前北京时间
+    // 计算时间差（毫秒），now 为绝对时间戳，与时区无关
     const now = new Date();
     
     // 计算时间差（毫秒）
@@ -66,6 +72,7 @@ function checkIfUserMuted(isMutedValue) {
     if (diffMinutes > 0) {
       result.muted = true;
       result.remainingMinutes = diffMinutes;
+      result.remainingSeconds = Math.ceil(diffMs / 1000);
     } else {
       result.muted = false; // 已过期
     }
@@ -145,7 +152,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
 
         // 合并查询2：成员存在性 + 管理员 + 禁言状态（原查询2+4合并为一次）
         const [memberRows] = await pool.execute(
-          'SELECT is_admin, is_muted FROM scr_group_members WHERE group_id = ? AND user_id = ? AND deleted_at IS NULL',
+          "SELECT is_admin, DATE_FORMAT(is_muted, '%Y-%m-%d %H:%i:%s') AS is_muted FROM scr_group_members WHERE group_id = ? AND user_id = ? AND deleted_at IS NULL",
           [groupId, userId]
         );
 
@@ -180,33 +187,22 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
           const isUserMuted = checkIfUserMuted(member.is_muted);
 
           if (isUserMuted.muted) {
-            if (isUserMuted.permanent) {
-              // 永久禁言
-              socket.emit(SocketEvents.MESSAGE_SENT, { 
-                success: false,
-                error: {
-                  code: 'USER_MUTED',
-                  message: '您已被永久禁言，无法发送消息'
-                }
-              });
-              return;
-            } else if (isUserMuted.remainingMinutes > 0) {
-              // 临时禁言尚未到期
-              socket.emit(SocketEvents.MESSAGE_SENT, { 
-                success: false,
-                error: {
-                  code: 'USER_MUTED',
-                  message: `您已被禁言，剩余时间约${isUserMuted.remainingMinutes}分钟`
-                }
-              });
-              return;
-            } else {
-              // 禁言已过期，自动解除禁言（设置为NULL）
-              await pool.execute(
-                'UPDATE scr_group_members SET is_muted = NULL WHERE group_id = ? AND user_id = ?',
-                [groupId, userId]
-              );
-            }
+            // 剩余时间精确到秒（checkIfUserMuted 已确保未过期，remainingSeconds > 0）
+            const remainMin = Math.floor(isUserMuted.remainingSeconds / 60);
+            const remainSec = isUserMuted.remainingSeconds % 60;
+            const remainText = remainMin > 0
+              ? `剩余时间${remainMin}分${remainSec}秒`
+              : `剩余时间${remainSec}秒`;
+            socket.emit(SocketEvents.MESSAGE_SENT, {
+              success: false,
+              error: {
+                code: 'USER_MUTED',
+                message: isUserMuted.permanent
+                  ? '您已被永久禁言，无法发送消息'
+                  : `您已被禁言，${remainText}，到期后即可自动发送`
+              }
+            });
+            return;
           }
         }
 

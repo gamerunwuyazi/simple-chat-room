@@ -485,6 +485,17 @@ export const useStorageStore = defineStore('storage', () => {
               isSystemMessage: true
             });
           }
+          // 离线拉取期间（loading=true）原消息在 cache 数组中，也要同步标记，
+          // 否则合并进显示列表时会以原始文本/JSON 内容显示
+          const publicCacheIndex = cachePublicMessages.findIndex(m => String(m.id) === String(messageIdToDelete));
+          if (publicCacheIndex !== -1) {
+            cachePublicMessages[publicCacheIndex] = toRaw({
+              ...toRaw(cachePublicMessages[publicCacheIndex]),
+              content: recallJson,
+              isRecalled: true,
+              isSystemMessage: true
+            });
+          }
         }
       }
       const targetMessages = baseStore.loading ? cachePublicMessages : (publicStore.publicMessages || []);
@@ -596,6 +607,19 @@ export const useStorageStore = defineStore('storage', () => {
               isRecalled: true,
               isSystemMessage: true
             });
+          }
+          // 离线拉取期间（loading=true）原消息在 cache 数组中，也要同步标记
+          const groupCacheMessages = cacheGroupMessages[groupId];
+          if (groupCacheMessages) {
+            const groupCacheIndex = groupCacheMessages.findIndex(m => String(m.id) === String(messageIdToDelete));
+            if (groupCacheIndex !== -1) {
+              groupCacheMessages[groupCacheIndex] = toRaw({
+                ...toRaw(groupCacheMessages[groupCacheIndex]),
+                content: recallJson,
+                isRecalled: true,
+                isSystemMessage: true
+              });
+            }
           }
         }
       }
@@ -710,6 +734,19 @@ export const useStorageStore = defineStore('storage', () => {
               isRecalled: true,
               isSystemMessage: true
             });
+          }
+          // 离线拉取期间（loading=true）原消息在 cache 数组中，也要同步标记
+          const privateCacheMessages = cachePrivateMessages[otherUserId];
+          if (privateCacheMessages) {
+            const privateCacheIndex = privateCacheMessages.findIndex(m => String(m.id) === String(messageIdToDelete));
+            if (privateCacheIndex !== -1) {
+              privateCacheMessages[privateCacheIndex] = toRaw({
+                ...toRaw(privateCacheMessages[privateCacheIndex]),
+                content: recallJson,
+                isRecalled: true,
+                isSystemMessage: true
+              });
+            }
           }
         }
       } else if (isReadReceiptMessage) {

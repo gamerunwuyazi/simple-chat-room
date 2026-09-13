@@ -632,7 +632,7 @@ function restoreScrollPosition() {
 
 async function handleScroll(e, container, isGroup, isPrivate = false) {
   const containerId = isPrivate ? 'private' : (isGroup ? 'group' : 'public');
-  
+
   if (container.scrollTop < 50) {
     const sessionStore = useSessionStore();
     const baseStore = useBaseStore();
@@ -693,7 +693,7 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
 
       const prevScrollHeight = container.scrollHeight;
       const prevScrollTop = container.scrollTop;
-      
+
       if (isPrivate) {
         prevPrivateScrollHeight = prevScrollHeight;
         prevPrivateScrollTop = prevScrollTop;

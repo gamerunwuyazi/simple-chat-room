@@ -27,12 +27,15 @@
 
       <div id="groupMessageContainer" ref="groupMessageContainerRef">
         <template v-if="groupMessages.length !== 0">
-          <GroupMessageItem 
-            v-for="message in groupMessages" 
-            :key="message.id"
-            :message="message"
-            :is-own="isOwnMessage(message)"
-          />
+          <template v-for="segment in groupMessageSegments" :key="segment.key">
+            <div v-if="segment.showDivider" class="date-divider">{{ segment.label }}</div>
+            <GroupMessageItem
+              v-for="message in segment.messages"
+              :key="message.id"
+              :message="message"
+              :is-own="isOwnMessage(message)"
+            />
+          </template>
         </template>
         <div v-else class="empty-state">
           <h3>暂无群消息</h3>
@@ -309,6 +312,7 @@ import {
 import toast from "@/utils/toast";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
+import { buildDateSegments } from "@/utils/chat/message.js";
 import { getGroupInfo, getGroupMembers } from '@/api/group.js';
 
 const baseStore = useBaseStore();
@@ -323,10 +327,7 @@ const publicStore = usePublicStore();
 const modalStore = useModalStore();
 const route = useRoute();
 
-let prevGroupScrollHeight = undefined;
-let prevGroupScrollTop = undefined;
 let restoringGroupDraft = false;
-let isLoadingMoreMessages = false;
 let scrollingInitialized = { group: false };
 
 const groupMessageInputRef = ref(null);
@@ -395,6 +396,9 @@ const groupMessages = computed(() => {
   return groupStore.groupMessages[sessionStore.currentGroupId] || [];
 });
 
+// 按天分组渲染日期分隔标签，避免每条消息都产生一个 v-if 占位节点
+const groupMessageSegments = computed(() => buildDateSegments(groupMessages.value, groupStore.isGroupAllLoaded(sessionStore.currentGroupId)));
+
 function isOwnMessage(message) {
   if (!currentUserId.value) return false;
   return String(message.userId) === String(currentUserId.value) || 
@@ -414,28 +418,6 @@ function isNearBottom() {
   const container = groupMessageContainerRef.value;
   const threshold = 150;
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
-}
-
-function refreshScrollPos() {
-  if (prevGroupScrollHeight === undefined || prevGroupScrollTop === undefined) {
-    return;
-  }
-  
-  nextTick(() => {
-    if (groupMessageContainerRef.value) {
-      const scrollWrap = groupMessageContainerRef.value;
-      const newScrollHeight = scrollWrap.scrollHeight;
-      const offsetTop = newScrollHeight - prevGroupScrollHeight;
-      
-      if (offsetTop !== 0) {
-        const newScrollTop = prevGroupScrollTop + offsetTop;
-        scrollWrap.scrollTop = newScrollTop;
-      }
-      
-      prevGroupScrollHeight = undefined;
-      prevGroupScrollTop = undefined;
-    }
-  });
 }
 
 function applySavedGroupState() {
@@ -1244,9 +1226,6 @@ watch(
   () => sessionStore.currentGroupId,
   (newGroupId, oldGroupId) => {
     if (newGroupId && newGroupId !== oldGroupId) {
-      prevGroupScrollHeight = undefined;
-      prevGroupScrollTop = undefined;
-      isLoadingMoreMessages = false;
       if (scrollingInitialized) {
         scrollingInitialized.group = false;
       }
@@ -1279,13 +1258,25 @@ watch(
 
 watch(
   () => groupMessages.value,
-  (newMessages) => {
-    if (isLoadingMoreMessages) {
-      refreshScrollPos();
-      setTimeout(() => {
-        resetLoadingState();
-      }, 100);
-    } else if (newMessages.length > previousGroupMessageLength && !isLoadingMoreMessages) {
+  (newMessages, oldMessages) => {
+    // 加载更多（prepend）：首条消息 id 变化且末条不变，说明上方插入了更早的历史消息
+    const isPrepend = oldMessages && oldMessages.length > 0
+      && newMessages.length > oldMessages.length
+      && String(newMessages[0].id) !== String(oldMessages[0].id)
+      && String(newMessages[newMessages.length - 1].id) === String(oldMessages[oldMessages.length - 1].id);
+    if (isPrepend) {
+      // DOM 更新前捕获当前滚动位置（watch 默认 pre-flush，此时 DOM 还是旧的）
+      const container = groupMessageContainerRef.value;
+      const oldScrollHeight = container ? container.scrollHeight : undefined;
+      const oldScrollTop = container ? container.scrollTop : undefined;
+      // DOM 更新后、浏览器绘制前恢复位置，消除加载更多时顶部内容闪现一帧的问题
+      nextTick(() => {
+        const wrap = groupMessageContainerRef.value;
+        if (wrap && oldScrollHeight !== undefined && oldScrollTop !== undefined) {
+          wrap.scrollTop = wrap.scrollHeight - oldScrollHeight + oldScrollTop;
+        }
+      });
+    } else if (newMessages.length > previousGroupMessageLength) {
       if (isNearBottom()) {
         scrollToBottom();
       }
@@ -1318,9 +1309,6 @@ watch(
     }
     
     if (newPath.startsWith('/chat/group')) {
-      prevGroupScrollHeight = undefined;
-      prevGroupScrollTop = undefined;
-      isLoadingMoreMessages = false;
       if (scrollingInitialized) {
         scrollingInitialized.group = false;
       }

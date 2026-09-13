@@ -604,6 +604,19 @@ body.dark-mode .msg-read-status.unread {
     color: #58a6ff;
 }
 
+/* === 跨天日期分隔提示（居中黑体文字，无边框无背景，参考微信） === */
+.date-divider {
+    text-align: center;
+    font-size: 13px;
+    font-weight: bold;
+    color: #666;
+    padding: 12px 0 6px;
+}
+
+body.dark-mode .date-divider {
+    color: #8b949e;
+}
+
 /* === 系统消息 === */
 body.dark-mode .system-message-text {
     background-color: #21262d !important;

@@ -223,8 +223,8 @@ async function updateFriendsList(friends) {
 
     for (const friend of friends) {
       const existingFriend = existingFriendMap.get(String(friend.id));
-      // 后端返回 status: 1=正常好友，污点状态(0/5/6/10/11)=已删除会话
-      const isDeletedSession = friend.status !== undefined && friend.status !== 1;
+      // 后端返回 status: 1=正常好友，4=我拉黑对方、5=对方拉黑我、10=互相拉黑（拉黑不影响会话显示），污点状态(0/6/11)=已删除会话
+      const isDeletedSession = friend.status !== undefined && friend.status !== 1 && friend.status !== 4 && friend.status !== 5 && friend.status !== 10;
 
       try {
         const key = `${prefix}-private-${friend.id}`;
@@ -424,12 +424,17 @@ async function updateFriendsList(friends) {
   }
 }
 
+// 进行中的添加好友请求去重：防止连击/重复触发并发提交，导致后端唯一键冲突
+const addingFriendIds = new Set();
+
 export function addFriend(userId, message = '') {
   const baseStore = useBaseStore();
   const currentUser = baseStore.currentUser;
   const currentSessionToken = baseStore.currentSessionToken;
 
   if (!currentUser || !currentSessionToken) return;
+  if (addingFriendIds.has(String(userId))) return;
+  addingFriendIds.add(String(userId));
 
   apiAddFriend(userId, message).then(res => {
     const data = res.data;
@@ -438,6 +443,9 @@ export function addFriend(userId, message = '') {
   })
   .catch(err => {
     toast.error(err.response?.data?.message || err.message || '操作失败');
+  })
+  .finally(() => {
+    addingFriendIds.delete(String(userId));
   });
 }
 

@@ -7,6 +7,7 @@ import { pool, redisClient} from '../models/database.js';
 import { checkRegisterRateLimit, checkLoginRateLimit } from '../utils/rateLimiters.js';
 import { validateUsername, validatePassword, validateNickname } from '../utils/validators.js';
 import { getClientIP, generateSessionToken } from '../utils/helpers.js';
+import { isIPBanned, isUserBanned } from '../middleware/auth.js';
 import { filterMessageFields } from '../utils/messageFilters.js';
 import { sessionConfig } from '../config/index.js';
 import {
@@ -58,20 +59,13 @@ export async function register(req, res) {
     const { username, password, nickname, gender, sessionId, nonce } = req.body;
     const clientIP = getClientIP(req);
 
-    // 直接查数据库检查 IP 封禁（不依赖 Redis）
-    const [ipBanRows] = await pool.execute(
-      'SELECT reason, expires_at FROM scr_banned_ips WHERE ip_address = ? AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1',
-      [clientIP]
-    );
-    if (ipBanRows.length > 0) {
-      const banRecord = ipBanRows[0];
+    // 从 Redis 检查 IP 封禁（封禁数据由 admin 接口/启动同步写入 Redis）
+    const ipBan = await isIPBanned(clientIP);
+    if (ipBan.isBanned) {
       let message = '您的 IP 已被封禁';
-      if (banRecord.reason) message += `，原因：${banRecord.reason}`;
-      if (banRecord.expires_at) {
-        const diff = new Date(banRecord.expires_at) - new Date();
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      if (ipBan.reason) message += `，原因：${ipBan.reason}`;
+      if (ipBan.remainingTime) {
+        const { days, hours, minutes } = ipBan.remainingTime;
         message += `，还剩 ${days}天${hours}小时${minutes}分钟解封`;
       }
       return res.status(403).json({ status: 'error', message });
@@ -184,10 +178,10 @@ export async function login(req, res) {
       }
 
       let users;
-      let ipBanRows;
+      let ipBan;
       try {
-        // 并行：查询用户记录 + IP封禁检查（互不依赖）
-        [users, ipBanRows] = await Promise.all([
+        // 并行：查询用户记录 + IP封禁检查（Redis，互不依赖）
+        [users, ipBan] = await Promise.all([
           (async () => {
             const [rows] = await pool.execute(
               'SELECT id, username, password, nickname, gender, avatar_url FROM scr_users WHERE username = ?',
@@ -195,10 +189,7 @@ export async function login(req, res) {
             );
             return rows;
           })(),
-          pool.execute(
-            'SELECT reason, expires_at FROM scr_banned_ips WHERE ip_address = ? AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1',
-            [clientIP]
-          ).then(([rows]) => rows)
+          isIPBanned(clientIP)
         ]);
 
         if (users.length === 0) {
@@ -230,32 +221,22 @@ export async function login(req, res) {
       }
 
       // IP 封禁检查（已与用户查询并行获取）
-      if (ipBanRows.length > 0) {
-        const banRecord = ipBanRows[0];
+      if (ipBan.isBanned) {
         let message = '您的 IP 已被封禁';
-        if (banRecord.reason) message += `，原因：${banRecord.reason}`;
-        if (banRecord.expires_at) {
-          const diff = new Date(banRecord.expires_at) - new Date();
-          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        if (ipBan.reason) message += `，原因：${ipBan.reason}`;
+        if (ipBan.remainingTime) {
+          const { days, hours, minutes } = ipBan.remainingTime;
           message += `，还剩 ${days}天${hours}小时${minutes}分钟解封`;
         }
         return res.status(429).json({ status: 'error', message, isBanned: true });
       }
-      const [userBanRows] = await pool.execute(
-        'SELECT reason, expires_at FROM scr_banned_ips WHERE user_id = ? AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1',
-        [user.id]
-      );
-      if (userBanRows.length > 0) {
-        const banRecord = userBanRows[0];
+      // 账号封禁检查（Redis）
+      const userBan = await isUserBanned(user.id);
+      if (userBan.isBanned) {
         let message = '您的账号已被封禁';
-        if (banRecord.reason) message += `，原因：${banRecord.reason}`;
-        if (banRecord.expires_at) {
-          const diff = new Date(banRecord.expires_at) - new Date();
-          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        if (userBan.reason) message += `，原因：${userBan.reason}`;
+        if (userBan.remainingTime) {
+          const { days, hours, minutes } = userBan.remainingTime;
           message += `，还剩 ${days}天${hours}小时${minutes}分钟解封`;
         }
         return res.status(429).json({ status: 'error', message, isBanned: true });
@@ -313,29 +294,21 @@ export async function refreshToken(req, res) {
 
     const session = rows[0];
 
-    // 直接查数据库检查封禁：先查 IP，再查 user_id（不依赖 Redis），封禁期间禁止刷新 token
+    // 从 Redis 检查封禁：先查 IP，再查 user_id，封禁期间禁止刷新 token
     const clientIP = req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
                      req.headers['x-real-ip'] ||
                      req.socket?.remoteAddress ||
                      'unknown';
-    const [ipBanRows] = await pool.execute(
-      'SELECT reason, expires_at FROM scr_banned_ips WHERE ip_address = ? AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1',
-      [clientIP]
-    );
-    if (ipBanRows.length > 0) {
-      const banRecord = ipBanRows[0];
+    const ipBan = await isIPBanned(clientIP);
+    if (ipBan.isBanned) {
       let message = '您的 IP 已被封禁，无法刷新会话';
-      if (banRecord.reason) message += `，原因：${banRecord.reason}`;
+      if (ipBan.reason) message += `，原因：${ipBan.reason}`;
       return res.status(429).json({ status: 'error', message, isBanned: true });
     }
-    const [userBanRows] = await pool.execute(
-      'SELECT reason, expires_at FROM scr_banned_ips WHERE user_id = ? AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1',
-      [parseInt(userId)]
-    );
-    if (userBanRows.length > 0) {
-      const banRecord = userBanRows[0];
+    const userBan = await isUserBanned(parseInt(userId));
+    if (userBan.isBanned) {
       let message = '您的账号已被封禁，无法刷新会话';
-      if (banRecord.reason) message += `，原因：${banRecord.reason}`;
+      if (userBan.reason) message += `，原因：${userBan.reason}`;
       return res.status(429).json({ status: 'error', message, isBanned: true });
     }
 
