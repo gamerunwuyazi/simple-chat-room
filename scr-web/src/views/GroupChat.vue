@@ -27,15 +27,12 @@
 
       <div id="groupMessageContainer" ref="groupMessageContainerRef">
         <template v-if="groupMessages.length !== 0">
-          <template v-for="segment in groupMessageSegments" :key="segment.key">
-            <div v-if="segment.showDivider" class="date-divider">{{ segment.label }}</div>
-            <GroupMessageItem
-              v-for="message in segment.messages"
-              :key="message.id"
-              :message="message"
-              :is-own="isOwnMessage(message)"
-            />
-          </template>
+          <GroupMessageItem
+            v-for="message in groupMessages"
+            :key="message.id"
+            :message="message"
+            :is-own="isOwnMessage(message)"
+          />
         </template>
         <div v-else class="empty-state">
           <h3>暂无群消息</h3>
@@ -312,7 +309,6 @@ import {
 import toast from "@/utils/toast";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
-import { buildDateSegments } from "@/utils/chat/message.js";
 import { getGroupInfo, getGroupMembers } from '@/api/group.js';
 
 const baseStore = useBaseStore();
@@ -395,9 +391,6 @@ const currentUserId = computed(() => baseStore.currentUser?.id);
 const groupMessages = computed(() => {
   return groupStore.groupMessages[sessionStore.currentGroupId] || [];
 });
-
-// 按天分组渲染日期分隔标签，避免每条消息都产生一个 v-if 占位节点
-const groupMessageSegments = computed(() => buildDateSegments(groupMessages.value, groupStore.isGroupAllLoaded(sessionStore.currentGroupId)));
 
 function isOwnMessage(message) {
   if (!currentUserId.value) return false;
@@ -1363,7 +1356,7 @@ function handleGroupMembersChanged(event) {
 onMounted(() => {
   window.addEventListener('group-switched', handleGroupSwitched);
   window.addEventListener('group-members-changed', handleGroupMembersChanged);
-  
+
   if (sessionStore.currentGroupId) {
     applySavedGroupState();
   }

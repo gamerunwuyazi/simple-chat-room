@@ -509,7 +509,7 @@ export function sendPrivateMessage() {
     chatSocket.on('private-message-sent', privateMessageSentHandler);
     
     chatSocket.emit('send-private-message', messageData);
-    
+
     if (quotedMessage) {
       inputStore?.clearQuotedMessage();
     }
@@ -517,34 +517,25 @@ export function sendPrivateMessage() {
 }
 
 /**
- * 将消息列表按日历日期（年/月/日）分组，用于渲染日期分隔标签（参考微信）
- * 规则：相邻消息的日历日期不同才算跨天，而非间隔超过24小时
- * 以分组代替逐条 v-if 判断，避免每条消息都产生一个占位节点
- * @param {Array} messages 按时间正序排列的消息列表
- * @param {boolean} allLoaded 历史消息是否已全部加载
- * @returns {Array} [{ key, label, showDivider, messages }]
+ * 格式化消息时间戳：时分秒前按需拼接日期前缀（与当前日期比较）
+ * 同日不显示日期；同月只显示日；同年显示月日；跨年显示年月日
+ * @param {Date} date 消息时间
+ * @returns {string} 如 "2025年9月1日 14:30:25" / "9月20日 14:30:25" / "23日 14:30:25" / "14:30:25"
  */
-export function buildDateSegments(messages, allLoaded = false) {
-  const segments = [];
-  for (const msg of messages) {
-    const d = new Date(msg.timestamp);
-    const dayKey = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-    const last = segments[segments.length - 1];
-    if (last && last.key === dayKey) {
-      last.messages.push(msg);
-    } else {
-      segments.push({
-        key: dayKey,
-        label: `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`,
-        showDivider: true,
-        messages: [msg]
-      });
-    }
+export function formatMessageTime(date) {
+  const time = date.toLocaleTimeString();
+  const now = new Date();
+  const sameYear = date.getFullYear() === now.getFullYear();
+  const sameMonth = sameYear && date.getMonth() === now.getMonth();
+  const sameDay = sameMonth && date.getDate() === now.getDate();
+  if (sameDay) return time;
+  let prefix;
+  if (sameMonth) {
+    prefix = `${date.getDate()}日`;
+  } else if (sameYear) {
+    prefix = `${date.getMonth() + 1}月${date.getDate()}日`;
+  } else {
+    prefix = `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
   }
-  // 首段日期仅在确认历史消息已全部加载时显示：
-  // 否则上方可能还存在同天的更早消息，顶部日期会在加载更多时反复增删导致闪现
-  if (segments.length > 0 && !allLoaded) {
-    segments[0].showDivider = false;
-  }
-  return segments;
+  return `${prefix} ${time}`;
 }

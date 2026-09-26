@@ -615,6 +615,14 @@ onUnmounted(() => {
             <div class="version-label">开发者</div>
             <div class="version-value">无崖子——gamerunwuyazi</div>
           </div>
+          <div class="version-item">
+            <div class="version-label">仓库地址</div>
+            <div class="version-value">https://github.com/gamerunwuyazi/simple-chat-room</div>
+          </div>
+          <div class="version-item">
+            <div class="version-label">copyright(c) 2026 无崖子——gamerunwuyazi</div>
+            <div class="version-value">版权所有 侵权必究</div>
+          </div>
         </div>
       </div>
 

@@ -38,15 +38,12 @@
 
       <div id="privateMessageContainer" ref="privateMessageContainerRef">
         <template v-if="privateMessages.length !== 0">
-          <template v-for="segment in privateMessageSegments" :key="segment.key">
-            <div v-if="segment.showDivider" class="date-divider">{{ segment.label }}</div>
-            <PrivateMessageItem
-              v-for="message in segment.messages"
-              :key="message.id"
-              :message="message"
-              :is-own="isOwnMessage(message)"
-            />
-          </template>
+          <PrivateMessageItem
+            v-for="message in privateMessages"
+            :key="message.id"
+            :message="message"
+            :is-own="isOwnMessage(message)"
+          />
         </template>
         <div v-else class="empty-state">
           <h3>暂无私信</h3>
@@ -204,7 +201,6 @@ import {
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
-import { buildDateSegments } from "@/utils/chat/message.js";
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -248,9 +244,6 @@ const currentUserId = computed(() => baseStore.currentUser?.id);
 const privateMessages = computed(() => {
   return friendStore.privateMessages[sessionStore.currentPrivateChatUserId] || [];
 });
-
-// 按天分组渲染日期分隔标签，避免每条消息都产生一个 v-if 占位节点
-const privateMessageSegments = computed(() => buildDateSegments(privateMessages.value, friendStore.isPrivateAllLoaded(sessionStore.currentPrivateChatUserId)));
 
 function isOwnMessage(message) {
   if (!currentUserId.value) return false;
@@ -797,6 +790,7 @@ onMounted(() => {
   }, 500);
 
   window.addEventListener('private-switched', handlePrivateSwitched);
+
   scrollToBottom();
   
   document.addEventListener('click', function(e) {

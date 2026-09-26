@@ -14,15 +14,12 @@
 
     <div id="messageContainer" ref="messageContainerRef">
       <template v-if="publicStore.publicMessages.length !== 0">
-        <template v-for="segment in publicMessageSegments" :key="segment.key">
-          <div v-if="segment.showDivider" class="date-divider">{{ segment.label }}</div>
-          <PublicMessageItem
-            v-for="message in segment.messages"
-            :key="message.id"
-            :message="message"
-            :is-own="isOwnMessage(message)"
-          />
-        </template>
+        <PublicMessageItem
+          v-for="message in publicStore.publicMessages"
+          :key="message.id"
+          :message="message"
+          :is-own="isOwnMessage(message)"
+        />
       </template>
       <div v-else class="empty-state" id="emptyState">
         <h3>暂无消息</h3>
@@ -263,7 +260,7 @@ import {
   resetLoadingState,
   updateUnreadCountsDisplay
 } from "@/utils/chat";
-import { clearContentEditable, buildDateSegments } from "@/utils/chat/message.js";
+import { clearContentEditable } from "@/utils/chat/message.js";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
@@ -287,9 +284,6 @@ const groupStore = useGroupStore();
 const friendStore = useFriendStore();
 const unreadStore = useUnreadStore();
 const route = useRoute();
-
-// 按天分组渲染日期分隔标签，避免每条消息都产生一个 v-if 占位节点
-const publicMessageSegments = computed(() => buildDateSegments(publicStore.publicMessages, publicStore.isPublicAllLoaded()));
 
 let scrollingInitialized = { public: false };
 

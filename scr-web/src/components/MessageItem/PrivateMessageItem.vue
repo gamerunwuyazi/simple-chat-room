@@ -131,6 +131,7 @@ import { useModalStore } from '@/stores/modalStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useInputStore } from '@/stores/inputStore';
 import { showGroupCardPopup, getChatSocket } from '@/utils/chat';
+import { formatMessageTime } from '@/utils/chat/message.js';
 import toast from '@/utils/toast';
 import { useContextMenuKeyboard } from "@/composables/useContextMenuKeyboard";
 import { openUserAvatarPopup } from '@/stores/index.js';
@@ -180,7 +181,7 @@ onMounted(() => {
 
 const messageTime = computed(() => {
   const timestamp = props.message.timestampISO || props.message.created_at || props.message.timestamp;
-  return new Date(timestamp).toLocaleTimeString();
+  return formatMessageTime(new Date(timestamp));
 });
 
 const senderNickname = computed(() => {

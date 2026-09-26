@@ -128,6 +128,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useInputStore } from '@/stores/inputStore';
 import { openUserAvatarPopup } from '@/stores/index.js';
 import { showGroupCardPopup, getChatSocket } from '@/utils/chat';
+import { formatMessageTime } from '@/utils/chat/message.js';
 import { useContextMenuKeyboard } from "@/composables/useContextMenuKeyboard";
 import toast from '@/utils/toast';
 
@@ -248,9 +249,9 @@ function handleAvatarError() {
 
 const messageTime = computed(() => {
   if (props.message.timestamp) {
-    return new Date(props.message.timestamp).toLocaleTimeString();
+    return formatMessageTime(new Date(props.message.timestamp));
   }
-  return new Date().toLocaleTimeString();
+  return formatMessageTime(new Date());
 });
 
 const messageIdentifier = computed(() => {
