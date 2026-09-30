@@ -1320,19 +1320,21 @@ export async function handleUnblockUser(req, res, io) {
 
     try {
       if (isMutualUnblocking) {
+        // 互相拉黑状态下自己取消对对方的拉黑：对方对自己的拉黑依然生效，
+        // 自己的行降为“被拉黑(5)”，对方的行降为“拉黑(4)”，不能两边都恢复正常
         await pool.execute(
-          'UPDATE scr_friends SET status = 1, created_at = NOW() WHERE user_id = ? AND friend_id = ? AND status = 10',
+          'UPDATE scr_friends SET status = 5, created_at = NOW() WHERE user_id = ? AND friend_id = ? AND status = 10',
           [userId, targetIdNum]
         );
 
         if (existingReverse.length > 0) {
           await pool.execute(
-            'UPDATE scr_friends SET status = 1, created_at = NOW() WHERE user_id = ? AND friend_id = ? AND status = 10',
+            'UPDATE scr_friends SET status = 4, created_at = NOW() WHERE user_id = ? AND friend_id = ? AND status = 10',
             [targetIdNum, userId]
           );
         } else {
           await pool.execute(
-            'INSERT INTO scr_friends (user_id, friend_id, status, created_at) VALUES (?, ?, 1, NOW())',
+            'INSERT INTO scr_friends (user_id, friend_id, status, created_at) VALUES (?, ?, 4, NOW())',
             [targetIdNum, userId]
           );
         }
@@ -1369,7 +1371,7 @@ export async function handleUnblockUser(req, res, io) {
 
       res.json({
         status: 'success',
-        message: isMutualUnblocking ? '已取消互相拉黑，恢复好友关系' : (hasStatusZero ? '已取消拉黑并清除记录' : '已取消拉黑，恢复好友关系'),
+        message: isMutualUnblocking ? '已取消拉黑，对方仍拉黑着你' : (hasStatusZero ? '已取消拉黑并清除记录' : '已取消拉黑，恢复好友关系'),
         isMutualUnblocking: isMutualUnblocking
       });
     } catch (err) {

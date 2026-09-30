@@ -503,13 +503,10 @@ export async function getOfflineMessages(req, res) {
         p.is_read as isRead,
         p.timestamp,
         'private' as type,
-        u1.nickname as nickname,
-        u1.avatar_url as avatarUrl,
-        u2.nickname as receiverNickname,
-        u2.avatar_url as receiverAvatarUrl
+        u.nickname,
+        u.avatar_url as avatarUrl
       FROM scr_private_messages p
-      JOIN scr_users u1 ON p.sender_id = u1.id
-      JOIN scr_users u2 ON p.receiver_id = u2.id
+      JOIN scr_users u ON p.sender_id = u.id
       WHERE ((p.sender_id = ? AND p.receiver_id != ?) OR (p.receiver_id = ? AND p.sender_id != ?))
         AND EXISTS (
           SELECT 1 FROM scr_friends cf

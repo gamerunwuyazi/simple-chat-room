@@ -750,11 +750,9 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
         let query = `
           SELECT p.id, p.sender_id as senderId, p.receiver_id as receiverId, 
                  p.content, p.at_userid, p.message_type as messageType, p.is_read as isRead, p.timestamp,
-                 u1.nickname as senderNickname, u1.avatar_url as senderAvatarUrl,
-                 u2.nickname as receiverNickname, u2.avatar_url as receiverAvatarUrl
+                 u.nickname, u.avatar_url as avatarUrl
           FROM scr_private_messages p
-          JOIN scr_users u1 ON p.sender_id = u1.id
-          JOIN scr_users u2 ON p.receiver_id = u2.id
+          JOIN scr_users u ON p.sender_id = u.id
           WHERE ((p.sender_id = ? AND p.receiver_id = ?) OR (p.sender_id = ? AND p.receiver_id = ?))`;
         
         const params = [numericUserId, numericFriendId, numericFriendId, numericUserId];
@@ -791,10 +789,8 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
             id: msg.id,
             senderId: msg.senderId,
             receiverId: msg.receiverId,
-            senderNickname: msg.senderNickname,
-            senderAvatarUrl: msg.senderAvatarUrl,
-            receiverNickname: msg.receiverNickname,
-            receiverAvatarUrl: msg.receiverAvatarUrl,
+            nickname: msg.nickname,
+            avatarUrl: msg.avatarUrl,
             content: msg.content,
             at_userid: atUserIds,
             messageType: msg.messageType,

@@ -1208,7 +1208,8 @@ export const useStorageStore = defineStore('storage', () => {
 
     Object.keys(fullPrivateMessages.value).forEach(otherUserId => {
       fullPrivateMessages.value[otherUserId].forEach(msg => {
-        if (String(msg.senderId) === String(userId) || String(msg.receiverId) === String(userId)) {
+        // 私信只按发送者匹配：接收者侧的 nickname/avatarUrl 属于对方，用当前用户信息覆盖会篡改发送者展示
+        if (String(msg.senderId) === String(userId)) {
           updateMsg(msg);
         } else if (msg.messageType === 100 && updates.nickname) {
           updateMsgContentOnly(msg);

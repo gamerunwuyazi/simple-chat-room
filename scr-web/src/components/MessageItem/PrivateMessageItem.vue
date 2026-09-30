@@ -8,8 +8,8 @@
       <div class="system-message-text">{{ systemMessage }}</div>
     </div>
   </div>
-  <div 
-    v-else
+  <div
+    v-else-if="!senderInfoMissing"
     :class="['message', isOwn ? 'own-message' : 'other-message', { 'active': isActive }]"
     :data-id="message.id"
     :data-identifier="messageIdentifier"
@@ -252,6 +252,16 @@ const ownInitials = computed(() => {
 
 const ownAvatarUrl = computed(() => {
   return baseStore.currentUser?.avatarUrl || baseStore.currentUser?.avatar_url;
+});
+
+// 非本人消息若丢失发送者信息（接口未返回 nickname / avatarUrl 字段）则直接不渲染，
+// 避免回退到好友列表或接收者自身信息导致展示错误
+const senderInfoMissing = computed(() => {
+  if (props.isOwn) return false;
+  const msg = props.message;
+  const nicknameMissing = msg.nickname === undefined || msg.nickname === null || msg.nickname === '';
+  const avatarDropped = msg.avatarUrl === undefined && msg.avatar_url === undefined;
+  return nicknameMissing || avatarDropped;
 });
 
 const isOwnSvgAvatar = computed(() => {
