@@ -1173,10 +1173,55 @@ function initializeWebSocket() {
         }
     });
 
-    // 用户列表更新事件
+    // 用户列表更新事件（仅加入聊天室时单播返回的完整在线列表，整体替换）
     socket.on('users-list', (data) => {
-        const allUsers = [...data.online, ...data.offline];
-        updateUserList(allUsers);
+        const onlineUsers = Array.isArray(data?.online) ? data.online : [];
+        updateUserList(onlineUsers);
+    });
+
+    // 用户上线广播事件（含用户信息）。
+    // 用户自己加入时也会收到自己的上线广播，但完整列表中已包含自己，按 id 去重避免重复添加
+    socket.on('user-online', (data) => {
+        if (!data || data.id === undefined || data.id === null) return;
+        const idStr = String(data.id);
+        const existingIndex = userStore.onlineUsers.findIndex(u => String(u.id) === idStr);
+        if (existingIndex === -1) {
+            userStore.onlineUsers.push({
+                id: data.id,
+                nickname: data.nickname,
+                avatarUrl: data.avatarUrl,
+                gender: data.gender,
+                isOnline: true
+            });
+        }
+        // 从离线列表中移除（若存在）
+        const offlineIndex = userStore.offlineUsers.findIndex(u => String(u.id) === idStr);
+        if (offlineIndex !== -1) {
+            userStore.offlineUsers.splice(offlineIndex, 1);
+        }
+    });
+
+    // 用户下线广播事件（含用户信息）
+    socket.on('user-offline', (data) => {
+        if (!data || data.id === undefined || data.id === null) return;
+        const idStr = String(data.id);
+        const onlineIndex = userStore.onlineUsers.findIndex(u => String(u.id) === idStr);
+        if (onlineIndex !== -1) {
+            userStore.onlineUsers.splice(onlineIndex, 1);
+        }
+        // 当前离线列表不包含自己，仅补充其他用户
+        if (onlineIndex !== -1 && String(baseStore.currentUser?.id) !== idStr) {
+            const offlineIndex = userStore.offlineUsers.findIndex(u => String(u.id) === idStr);
+            if (offlineIndex === -1) {
+                userStore.offlineUsers.push({
+                    id: data.id,
+                    nickname: data.nickname,
+                    avatarUrl: data.avatarUrl,
+                    isOnline: false,
+                    lastOnline: new Date().toISOString()
+                });
+            }
+        }
     });
 
     // 群组列表更新事件

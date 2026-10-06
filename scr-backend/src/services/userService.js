@@ -680,7 +680,7 @@ export async function getUserById(req, res) {
     const userId = req.params.id;
 
     const [users] = await pool.execute(
-        'SELECT id, username, nickname, gender, signature, avatar_url, friend_verification FROM scr_users WHERE id = ?',
+        'SELECT id, username, nickname, gender, signature, avatar_url, friend_verification, last_online FROM scr_users WHERE id = ?',
         [userId]
     );
 
@@ -697,7 +697,8 @@ export async function getUserById(req, res) {
         gender: users[0].gender,
         signature: users[0].signature,
         avatar_url: users[0].avatar_url,
-        friend_verification: users[0].friend_verification === 1
+        friend_verification: users[0].friend_verification === 1,
+        last_online: users[0].last_online
       }
     });
   } catch (err) {

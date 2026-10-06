@@ -43,11 +43,12 @@ function saveDeletedFriendSnapshot(snapshot) {
   } catch {}
 }
 
-function switchToPrivateChat(userId, nickname, username, avatarUrl) {
+function switchToPrivateChat(userId, nickname, username, avatarUrl, options = {}) {
   const sessionStore = useSessionStore();
   const friendStore = useFriendStore();
   const unreadStore = useUnreadStore();
   const draftStore = useDraftStore();
+  const noNavigate = !!(options && options.noNavigate);
   
   const currentPrivateUserId = sessionStore?.currentPrivateChatUserId;
   if (currentPrivateUserId) {
@@ -76,6 +77,8 @@ function switchToPrivateChat(userId, nickname, username, avatarUrl) {
 
   if (sessionStore) {
     sessionStore.setCurrentPrivateChatUserId(userId);
+    // 进入具体私聊时退出"新的朋友"好友申请面板
+    sessionStore.showFriendRequests = false;
   }
   
   if (friendStore && friendStore.setPrivateAllLoaded) {
@@ -88,7 +91,10 @@ function switchToPrivateChat(userId, nickname, username, avatarUrl) {
 
   setActiveChatDirect('private', userId, true);
 
-  navigateTo('/chat/private');
+  // 嵌入模式下不跳转路由，由 /chat 右侧面板切换渲染
+  if (!noNavigate) {
+    navigateTo('/chat/private');
+  }
   
   window.dispatchEvent(new CustomEvent('private-switched'));
   
@@ -97,6 +103,8 @@ function switchToPrivateChat(userId, nickname, username, avatarUrl) {
   }
   
   const hasMessages = friendStore && friendStore.privateMessages && friendStore.privateMessages[userId] && friendStore.privateMessages[userId].length > 0;
+  
+  return true;
 }
 
 function initializePrivateChatInterface() {
@@ -516,6 +524,7 @@ function showUserProfile(user) {
           gender: data.user.gender !== undefined ? data.user.gender : 0,
           signature: data.user.signature,
           friend_verification: data.user.friend_verification,
+          last_online: data.user.last_online,
           avatarUrl: data.user.avatar_url || data.user.avatarUrl || data.user.avatar
         };
       }

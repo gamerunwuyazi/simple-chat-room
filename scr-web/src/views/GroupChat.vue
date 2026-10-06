@@ -415,9 +415,15 @@ function isNearBottom() {
 
 function applySavedGroupState() {
   if (sessionStore.currentGroupId) {
-    setActiveChat('group', sessionStore.currentGroupId, false);
+    // 模拟真实打开会话：清除该群未读与 @我 标记，并设置发送类型等会话状态
+    setActiveChat('group', sessionStore.currentGroupId, true);
     isGroupChatVisible.value = true;
     currentGroupName.value = sessionStore.currentGroupName;
+    sessionStore.currentSendChatType = 'group';
+    sessionStore.selectedGroupIdForCard = sessionStore.currentGroupId;
+    if (groupStore) {
+      groupStore.clearGroupHasAtMe(sessionStore.currentGroupId);
+    }
     loadCurrentGroupInfo();
     
     const draftContent = draftStore.getDraft('group', sessionStore.currentGroupId);

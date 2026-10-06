@@ -1,6 +1,9 @@
 <template>
   <div class="chat-content" data-content="private-chat">
-    <div v-if="!isPrivateChatVisible" class="empty-chat-state">
+    <!-- 新的朋友：好友申请面板（微信风格，点击私信侧边栏置顶项打开） -->
+    <FriendRequestsPanel v-if="sessionStore.showFriendRequests" />
+
+    <div v-else-if="!isPrivateChatVisible" class="empty-chat-state">
       <h3>选择一个好友开始聊天</h3>
       <p>请从左侧好友列表中选择一个好友，开始私聊会话</p>
     </div>
@@ -176,6 +179,7 @@ import { useRoute } from "vue-router";
 
 import PrivateMessageItem from "@/components/MessageItem/PrivateMessageItem.vue";
 import QuotedMessagePreview from "@/components/MessageItem/QuotedMessagePreview.vue";
+import FriendRequestsPanel from "@/components/FriendRequestsPanel.vue";
 import { useBaseStore } from "@/stores/baseStore";
 import { useUserStore } from "@/stores/userStore";
 import { useFriendStore } from "@/stores/friendStore";
@@ -287,9 +291,11 @@ const displayCurrentUserName = computed(() => {
 
 function applySavedPrivateState() {
   if (sessionStore.currentPrivateChatUserId) {
-    setActiveChat('private', sessionStore.currentPrivateChatUserId, false);
+    // 模拟真实打开会话：清除该私聊未读并设置发送类型等会话状态
+    setActiveChat('private', sessionStore.currentPrivateChatUserId, true);
     isPrivateChatVisible.value = true;
     currentUserName.value = sessionStore.currentPrivateChatNickname;
+    sessionStore.currentSendChatType = 'private';
 
     const avatarUrl = sessionStore.currentPrivateChatAvatarUrl;
     if (avatarUrl) {

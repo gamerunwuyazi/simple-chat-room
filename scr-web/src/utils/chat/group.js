@@ -544,11 +544,12 @@ function moveGroupToTop(groupId) {
     }
 }
 
-async function switchToGroupChat(groupId, groupName) {
+async function switchToGroupChat(groupId, groupName, options = {}) {
     const sessionStore = useSessionStore();
     const groupStore = useGroupStore();
     const baseStore = useBaseStore();
     const draftStore = useDraftStore();
+    const noNavigate = !!(options && options.noNavigate);
     
     // 先保存旧群组草稿
     const oldGroupId = sessionStore?.currentGroupId;
@@ -594,7 +595,7 @@ async function switchToGroupChat(groupId, groupName) {
     } catch (err) {
       console.error('打开群组聊天失败:', err);
       toast.error('打开聊天失败: ' + (err.message || '网络错误'));
-      return;
+      return false;
     }
     
     // API 成功后才设置状态
@@ -615,18 +616,22 @@ async function switchToGroupChat(groupId, groupName) {
         unreadStore.clearGroupUnread(groupId);
     }
     
-    // 导航
+    // 导航（嵌入模式下不跳转路由，由 /chat 右侧面板切换渲染）
     setActiveChatDirect('group', groupId, true);
-    navigateTo('/chat/group');
+    if (!noNavigate) {
+      navigateTo('/chat/group');
+    }
     
     window.dispatchEvent(new CustomEvent('group-switched'));
     
     if (typeof updateUnreadCountsDisplay === 'function') {
-        updateUnreadCountsDisplay();
+      updateUnreadCountsDisplay();
     }
     
     const hasMessages = groupStore && groupStore.groupMessages && groupStore.groupMessages[groupId] && groupStore.groupMessages[groupId].length > 0;
     switchingGroupWithExistingMessages = hasMessages;
+    
+    return true;
 }
 
 function loadGroupMessages(groupId) {

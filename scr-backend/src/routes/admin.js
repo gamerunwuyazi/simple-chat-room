@@ -96,29 +96,8 @@ export function setupRoutes(app, io, broadcastProducer) {
           isOnline: true
         }));
 
-        const onlineUserIds = new Set(onlineUsersArray.map(u => u.id));
-
-        const [offlineUsersData] = await pool.execute(`
-          SELECT id, nickname, last_online, avatar_url as avatarUrl
-          FROM scr_users
-          WHERE last_online IS NOT NULL
-          AND last_online >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-          ORDER BY last_online DESC
-        `);
-
-        const offlineUsersArray = offlineUsersData
-          .filter(u => !onlineUserIds.has(u.id))
-          .map(u => ({
-            id: u.id,
-            nickname: u.nickname,
-            avatarUrl: u.avatarUrl,
-            isOnline: false,
-            lastOnline: u.last_online
-          }));
-
         broadcastProducer?.enqueue('authenticated_users', 'users-list', {
-          online: onlineUsersArray,
-          offline: offlineUsersArray
+          online: onlineUsersArray
         });
       }
 
@@ -175,29 +154,8 @@ export function setupRoutes(app, io, broadcastProducer) {
             isOnline: true
           }));
 
-          const onlineUserIds = new Set(onlineUsersArray.map(u => u.id));
-
-          const [offlineUsersData] = await pool.execute(`
-            SELECT id, nickname, last_online, avatar_url as avatarUrl
-            FROM scr_users
-            WHERE last_online IS NOT NULL
-            AND last_online >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-            ORDER BY last_online DESC
-          `);
-
-          const offlineUsersArray = offlineUsersData
-            .filter(u => !onlineUserIds.has(u.id))
-            .map(u => ({
-              id: u.id,
-              nickname: u.nickname,
-              avatarUrl: u.avatarUrl,
-              isOnline: false,
-              lastOnline: u.last_online
-            }));
-
           broadcastProducer?.enqueue('authenticated_users', 'users-list', {
-            online: onlineUsersArray,
-            offline: offlineUsersArray
+            online: onlineUsersArray
           });
         }
       }

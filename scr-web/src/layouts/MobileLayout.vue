@@ -68,22 +68,20 @@
       <div class="mobile-tab" :class="{ active: currentTab === 'public' }" @click="switchTab('public')">
         <span class="mobile-tab-icon"><i class="fas fa-comments tab-icon-img"></i></span>
         <span class="mobile-tab-label">公共</span>
-        <span v-if="publicUnread" class="mobile-tab-badge">{{ publicUnread > 99 ? '99+' : publicUnread }}</span>
+        <span v-if="totalUnread" class="mobile-tab-badge">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
       </div>
       <div class="mobile-tab" :class="{ active: currentTab === 'group' }" @click="switchTab('group')">
         <span class="mobile-tab-icon"><i class="fas fa-user-group tab-icon-img"></i></span>
         <span class="mobile-tab-label">群组</span>
-        <span v-if="groupUnread" class="mobile-tab-badge">{{ groupUnread > 99 ? '99+' : groupUnread }}</span>
       </div>
       <div class="mobile-tab" :class="{ active: currentTab === 'private' }" @click="switchTab('private')">
         <span class="mobile-tab-icon"><i class="fas fa-user tab-icon-img"></i></span>
         <span class="mobile-tab-label">私信</span>
-        <span v-if="privateUnread" class="mobile-tab-badge">{{ privateUnread > 99 ? '99+' : privateUnread }}</span>
+        <span v-if="friendRequestUnread" class="mobile-tab-badge">{{ friendRequestUnread > 99 ? '99+' : friendRequestUnread }}</span>
       </div>
       <div class="mobile-tab" :class="{ active: currentTab === 'settings' }" @click="switchTab('settings')">
         <span class="mobile-tab-icon"><i class="fas fa-gear tab-icon-img"></i></span>
         <span class="mobile-tab-label">设置</span>
-        <span v-if="friendRequestUnread" class="mobile-tab-badge">{{ friendRequestUnread > 99 ? '99+' : friendRequestUnread }}</span>
       </div>
     </div>
 
@@ -187,8 +185,14 @@ const privateUnread = computed(() => {
   return total;
 });
 
+// 好友申请数：私信 tab 角标（不计入标题未读）
 const friendRequestUnread = computed(() => {
   return Array.isArray(baseStore.receivedFriendRequests) ? baseStore.receivedFriendRequests.length : 0;
+});
+
+// 公共 tab 角标 = 主聊天室 + 群组 + 私信所有未读总和
+const totalUnread = computed(() => {
+  return publicUnread.value + groupUnread.value + privateUnread.value;
 });
 
 // 工具函数

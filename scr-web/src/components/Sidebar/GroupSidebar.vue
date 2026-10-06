@@ -2,6 +2,7 @@
 /* eslint-disable vue/multi-word-component-names */
 import { ref, computed, onUnmounted } from 'vue';
 
+import { usePagedList, searchSorter } from '@/composables/usePagedList';
 import { useBaseStore } from '@/stores/baseStore';
 import { useGroupStore } from '@/stores/groupStore';
 import { useFriendStore } from '@/stores/friendStore';
@@ -35,6 +36,9 @@ const currentContextMenuGroup = ref(null);
 
 // 群组搜索状态
 const groupSearchKeyword = ref('');
+
+// 侧边栏根节点即滚动容器（overflow-y: auto），供分页滚动监听与位置恢复使用
+const sidebarRef = ref(null);
 
 
 
@@ -166,6 +170,8 @@ async function deleteDeletedGroup(groupId) {
   }
 }
 
+// 搜索不受分页影响：始终对完整群组列表过滤；
+// 搜索结果排序按匹配率 + 最后消息时间（匹配率相同按最近活跃从近到远）
 const filteredGroupsList = computed(() => {
   if (!groupStore.groupsList) return [];
   const allGroups = [...groupStore.groupsList];
@@ -173,10 +179,17 @@ const filteredGroupsList = computed(() => {
     return allGroups;
   }
   const keyword = groupSearchKeyword.value.toLowerCase();
-  return allGroups.filter(group => {
+  const filtered = allGroups.filter(group => {
     const displayName = getGroupDisplayName(group).toLowerCase();
     return displayName.includes(keyword);
   });
+  return filtered.sort(searchSorter(groupSearchKeyword.value, group => getGroupDisplayName(group)));
+});
+
+// 分页：只渲染前 20 条，滚动到底再追加后 10 条；搜索变化时重置回顶部
+const { pagedList: pagedGroupsList } = usePagedList(filteredGroupsList, {
+  containerRef: sidebarRef,
+  resetTrigger: groupSearchKeyword
 });
 
 // 清除搜索
@@ -188,7 +201,7 @@ function clearGroupSearch() {
 async function handleGroupClick(group) {
   hideContextMenu();
   const originalGroupName = getGroupDisplayName(group);
-  await switchToGroupChat(group.id, originalGroupName, group.avatar_url || group.avatarUrl || '');
+  await switchToGroupChat(group.id, originalGroupName);
 }
 
 // 处理群组右键点击
@@ -249,7 +262,7 @@ function handleGroupAvatarError(event, group) {
 </script>
 
 <template>
-  <div id="secondary-sidebar">
+  <div id="secondary-sidebar" ref="sidebarRef">
     <div class="secondary-content" data-content="group-chat">
         <div class="sidebar-section">
             <div class="section-header">
@@ -266,7 +279,7 @@ function handleGroupAvatarError(event, group) {
                 <li v-else-if="groupStore.groupsList.length === 0" class="empty-item">
                     <span class="empty-text">暂无群组</span>
                 </li>
-                <li v-else v-for="group in filteredGroupsList" :key="group.id" 
+                <li v-else v-for="group in pagedGroupsList" :key="group.id" 
                     :data-group-id="group.id" 
                     :data-group-name="getGroupDisplayName(group)"
                     :class="{ 'deleted-item': group.deleted_at }"

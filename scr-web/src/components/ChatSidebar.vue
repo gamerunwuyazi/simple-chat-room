@@ -87,8 +87,14 @@ const privateUnreadCount = computed(() => {
   return total;
 });
 
+// 好友申请数：私聊图标角标（不计入标题未读，标题只统计 unreadMessages）
 const friendRequestUnreadCount = computed(() => {
   return Array.isArray(baseStore.receivedFriendRequests) ? baseStore.receivedFriendRequests.length : 0;
+});
+
+// 主聊天图标角标 = 主聊天室 + 群组 + 私信所有未读总和
+const totalUnreadCount = computed(() => {
+  return publicUnreadCount.value + groupUnreadCount.value + privateUnreadCount.value;
 });
 
 const currentUser = computed(() => {
@@ -145,6 +151,7 @@ async function handleMenuClick(section) {
 
   let path = '';
   if (section === 'public-chat') {
+    // 不重置面板类型：恢复上次打开的面板（chatPanelType 持久保存在 sessionStore 中）
     path = '/chat';
   } else if (section === 'group-chat') {
     path = '/chat/group';
@@ -178,16 +185,17 @@ async function handleMenuClick(section) {
         <ul class="menu-list">
             <li :class="['menu-item', { active: activeMenuItem === 'public-chat' }]" data-section="public-chat" @click="handleMenuClick('public-chat')">
                 <div class="chat-avatar"><i class="fas fa-comments"></i></div>
-                <div v-if="publicUnreadCount > 0" class="unread-count">{{ publicUnreadCount }}</div>
+                <span class="menu-label">消息</span>
+                <div v-if="totalUnreadCount > 0" class="unread-count">{{ totalUnreadCount }}</div>
             </li>
         </ul>
     </div>
-    
+
     <div class="menu-section">
         <ul class="menu-list">
             <li :class="['menu-item', { active: activeMenuItem === 'group-chat' }]" data-section="group-chat" @click="handleMenuClick('group-chat')">
                 <div class="chat-avatar"><i class="fas fa-user-group"></i></div>
-                <div v-if="groupUnreadCount > 0" class="unread-count">{{ groupUnreadCount }}</div>
+                <span class="menu-label">群聊</span>
             </li>
         </ul>
     </div>
@@ -196,7 +204,8 @@ async function handleMenuClick(section) {
         <ul class="menu-list">
             <li :class="['menu-item', { active: activeMenuItem === 'private-chat' }]" data-section="private-chat" @click="handleMenuClick('private-chat')">
                 <div class="chat-avatar"><i class="fas fa-user" style="font-size: 22px;"></i></div>
-                <div v-if="privateUnreadCount > 0" class="unread-count">{{ privateUnreadCount }}</div>
+                <span class="menu-label">私聊</span>
+                <div v-if="friendRequestUnreadCount > 0" class="unread-count">{{ friendRequestUnreadCount > 99 ? '99+' : friendRequestUnreadCount }}</div>
             </li>
         </ul>
     </div>
@@ -207,17 +216,18 @@ async function handleMenuClick(section) {
                 <div class="chat-avatar">
                     <i class="fas fa-gear"></i>
                 </div>
-                <span v-if="friendRequestUnreadCount > 0" class="unread-count">{{ friendRequestUnreadCount > 99 ? '99+' : friendRequestUnreadCount }}</span>
+                <span class="menu-label">设置</span>
             </li>
         </ul>
     </div>
-    
+
     <div class="menu-section" style="margin-top: auto; margin-bottom: 20px;">
         <ul class="menu-list">
             <li class="menu-item" data-section="logout" @click="handleMenuClick('logout')">
                 <div class="chat-avatar">
                     <i class="fas fa-power-off"></i>
                 </div>
+                <span class="menu-label">退出登录</span>
             </li>
         </ul>
     </div>
@@ -225,6 +235,30 @@ async function handleMenuClick(section) {
 </template>
 
 <style scoped>
+/* 图标下方加行小字：菜单项改为纵向排列 */
+.menu-item {
+  flex-direction: column;
+  gap: 2px;
+  height: auto;
+  padding: 8px 0;
+}
+
+.menu-label {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #64748b;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.menu-item:hover .menu-label {
+  color: #1e293b;
+}
+
+.menu-item.active .menu-label {
+  color: white;
+}
+
 .chat-avatar {
   position: relative;
 }

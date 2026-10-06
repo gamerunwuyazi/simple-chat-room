@@ -126,7 +126,7 @@ export function registerUserHandlers(socket, io, { pool, addOnlineUser, removeOn
         console.error('记录IP日志失败:', logErr.message);
       }
 
-      // 广播更新后的用户列表
+      // 完整在线用户列表只返回给当前加入的前端（单播），不再返回离线列表、不再集体广播全量列表
       const onlineUsersList = await getAllOnlineUsers();
       const onlineUsersArray = onlineUsersList.map(user => ({
         id: user.id,
@@ -135,30 +135,18 @@ export function registerUserHandlers(socket, io, { pool, addOnlineUser, removeOn
         isOnline: true
       }));
 
-      const onlineUserIds = new Set(onlineUsersArray.map(u => u.id));
-      
-      const [offlineUsersData] = await pool.execute(`
-        SELECT id, nickname, last_online, avatar_url as avatarUrl 
-        FROM scr_users 
-        WHERE last_online IS NOT NULL 
-        AND last_online >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        ORDER BY last_online DESC
-      `);
+      socket.emit(SocketEvents.USERS_LIST, {
+        online: onlineUsersArray
+      });
 
-      const offlineUsersArray = offlineUsersData
-        .filter(user => !onlineUserIds.has(user.id))
-        .map(user => ({
-          id: user.id,
-          nickname: user.nickname,
-          avatarUrl: user.avatarUrl,
-          isOnline: false,
-          lastOnline: user.last_online
-        }));
-
-      // 只向已认证用户广播用户列表
-      broadcastProducer?.enqueue('authenticated_users', SocketEvents.USERS_LIST, {
-        online: onlineUsersArray,
-        offline: offlineUsersArray
+      // 集体广播该用户的上线事件（含用户信息）。
+      // 已认证用户（含刚加入的该用户自己）都会收到，前端按用户 id 去重合并，
+      // 避免用户在自己已包含自己的完整列表里再添加一遍自己
+      broadcastProducer?.enqueue('authenticated_users', SocketEvents.USER_ONLINE, {
+        id: userId,
+        nickname: nickname,
+        avatarUrl: avatarUrl,
+        gender: gender
       });
 
       // 发送加入确认事件
@@ -170,46 +158,6 @@ export function registerUserHandlers(socket, io, { pool, addOnlineUser, removeOn
     } catch (err) {
       console.error('❌ 处理用户加入时出错:', err.message);
       socket.emit(SocketEvents.ERROR, { message: '加入聊天室失败' });
-    }
-  });
-
-  // 获取在线用户列表
-  socket.on(SocketEvents.GET_USERS, async () => {
-    try {
-      const allOnlineUsers = await getAllOnlineUsers();
-      const onlineUsersArray = allOnlineUsers.map(user => ({
-        id: user.id,
-        nickname: user.nickname,
-        avatarUrl: user.avatarUrl,
-        isOnline: true
-      }));
-
-      const onlineUserIds = new Set(onlineUsersArray.map(u => u.id));
-      
-      const [offlineUsersData] = await pool.execute(`
-        SELECT id, nickname, last_online, avatar_url as avatarUrl 
-        FROM scr_users 
-        WHERE last_online IS NOT NULL 
-        AND last_online >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        ORDER BY last_online DESC
-      `);
-
-      const offlineUsersArray = offlineUsersData
-        .filter(user => !onlineUserIds.has(user.id))
-        .map(user => ({
-          id: user.id,
-          nickname: user.nickname,
-          avatarUrl: user.avatarUrl,
-          isOnline: false,
-          lastOnline: user.last_online
-        }));
-
-      socket.emit(SocketEvents.USERS_LIST, {
-        online: onlineUsersArray,
-        offline: offlineUsersArray
-      });
-    } catch (err) {
-      console.error('获取用户列表失败:', err.message);
     }
   });
 
@@ -235,39 +183,11 @@ export function registerUserHandlers(socket, io, { pool, addOnlineUser, removeOn
         console.error('更新用户最后上线时间失败:', err.message);
       }
 
-      // 广播更新后的用户列表
-      const allOnlineUsers = await getAllOnlineUsers();
-      const onlineUsersArray = allOnlineUsers.map(u => ({
-        id: u.id,
-        nickname: u.nickname,
-        avatarUrl: u.avatarUrl,
-        isOnline: true
-      }));
-
-      const onlineUserIds = new Set(onlineUsersArray.map(u => u.id));
-      
-      const [offlineUsersData] = await pool.execute(`
-        SELECT id, nickname, last_online, avatar_url as avatarUrl 
-        FROM scr_users 
-        WHERE last_online IS NOT NULL 
-        AND last_online >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        ORDER BY last_online DESC
-      `);
-
-      const offlineUsersArray = offlineUsersData
-        .filter(user => !onlineUserIds.has(user.id))
-        .map(user => ({
-          id: user.id,
-          nickname: user.nickname,
-          avatarUrl: user.avatarUrl,
-          isOnline: false,
-          lastOnline: user.last_online
-        }));
-
-      // 只向已认证用户广播用户列表
-      broadcastProducer?.enqueue('authenticated_users', SocketEvents.USERS_LIST, {
-        online: onlineUsersArray,
-        offline: offlineUsersArray
+      // 集体广播该用户的下线事件（含用户信息），不再广播全量用户列表
+      broadcastProducer?.enqueue('authenticated_users', SocketEvents.USER_OFFLINE, {
+        id: user.id,
+        nickname: user.nickname,
+        avatarUrl: user.avatarUrl
       });
     }
   });

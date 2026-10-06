@@ -8,8 +8,9 @@ export const SocketEvents = {
   ERROR: 'error',
   
   // 用户列表
-  GET_USERS: 'get-users',
   USERS_LIST: 'users-list',
+  USER_ONLINE: 'user-online',
+  USER_OFFLINE: 'user-offline',
   
   // 消息相关
   SEND_MESSAGE: 'send-message',

@@ -2078,13 +2078,7 @@ body.dark-mode .empty-list-icon {
 
 body.dark-mode .user-list .empty-friends,
 body.dark-mode .user-list .empty-text,
-body.dark-mode .user-list li:has(.empty-text),
-body.dark-mode #offlineUserList li:only-child,
-body.dark-mode #userList li:only-child {
-    color: #8b949e;
-}
-
-body.dark-mode #offlineUserList li:first-child:last-child {
+body.dark-mode .user-list li:has(.empty-text) {
     color: #8b949e;
 }
 
@@ -5909,6 +5903,16 @@ body.dark-mode .send-group-card-container p {
     gap: 6px;
     font-size: 13px;
     color: #8a8a8a;
+}
+#userProfileModal .friend-last-online-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #8a8a8a;
+}
+#userProfileModal .friend-last-online.is-online {
+    color: #07c160;
 }
 #userProfileModal .copy-btn {
     cursor: pointer;

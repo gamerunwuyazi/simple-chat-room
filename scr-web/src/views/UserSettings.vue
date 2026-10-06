@@ -6,7 +6,7 @@ import { useStorageStore } from "@/stores/storageStore";
 import { useUnreadStore } from "@/stores/unreadStore";
 import { currentSessionToken } from "@/utils/chat";
 import modal from "@/utils/modal";
-import { updateNickname, updateSignature, updateGender, changePassword, acceptFriendRequest, rejectFriendRequest, cancelFriendRequest } from '@/api/user.js';
+import { updateNickname, updateSignature, updateGender, changePassword } from '@/api/user.js';
 import { uploadAvatar } from '@/api/upload.js';
 import { humanVerify } from 'human-verify';
 
@@ -72,8 +72,8 @@ const friendVerificationEnabled = ref(false)
 const friendRequestMessage = ref('')
 const friendRequestMessageClass = ref('')
 
-const receivedFriendRequestsFromStore = computed(() => baseStore.receivedFriendRequests || [])
-const sentFriendRequestsFromStore = computed(() => baseStore.sentFriendRequests || [])
+// copyright 显示的当前年份（前端实时获取）
+const currentYear = new Date().getFullYear()
 
 const userInitials = computed(() => {
   const user = JSON.parse(localStorage.getItem('currentUser') || '{}')
@@ -293,20 +293,6 @@ function triggerAvatarSelect() {
   }
 }
 
-function formatTime(timestamp) {
-  if (!timestamp) return ''
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diff = now - date
-
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)}天前`
-
-  return date.toLocaleDateString('zh-CN')
-}
-
 async function handleUploadAvatar() {
   if (!selectedAvatarFile.value) {
     avatarMessage.value = '请先选择图片'
@@ -377,54 +363,6 @@ async function handleToggleFriendVerification() {
     friendRequestMessage.value = result.message
     friendRequestMessageClass.value = 'error'
     friendVerificationEnabled.value = !friendVerificationEnabled.value
-  }
-}
-
-async function handleAcceptFriendRequest(requesterId) {
-  friendRequestMessage.value = ''
-
-  try {
-    const res = await acceptFriendRequest(requesterId);
-    const data = res.data;
-    friendRequestMessage.value = '已接受好友请求'
-    friendRequestMessageClass.value = 'success'
-    await baseStore.loadFriendRequests()
-  } catch (error) {
-    console.error('接受好友请求失败:', error)
-    friendRequestMessage.value = error.response?.data?.message || error.message || '接受好友请求失败'
-    friendRequestMessageClass.value = 'error'
-  }
-}
-
-async function handleRejectFriendRequest(requesterId) {
-  friendRequestMessage.value = ''
-
-  try {
-    const res = await rejectFriendRequest(requesterId);
-    const data = res.data;
-    friendRequestMessage.value = '已拒绝好友请求'
-    friendRequestMessageClass.value = 'success'
-    await baseStore.loadFriendRequests()
-  } catch (error) {
-    console.error('拒绝好友请求失败:', error)
-    friendRequestMessage.value = error.response?.data?.message || error.message || '拒绝好友请求失败'
-    friendRequestMessageClass.value = 'error'
-  }
-}
-
-async function handleCancelFriendRequest(friendId) {
-  friendRequestMessage.value = ''
-
-  try {
-    const res = await cancelFriendRequest(friendId);
-    const data = res.data;
-    friendRequestMessage.value = '已撤销好友请求'
-    friendRequestMessageClass.value = 'success'
-    await baseStore.loadFriendRequests()
-  } catch (error) {
-    console.error('撤销好友请求失败:', error)
-    friendRequestMessage.value = error.response?.data?.message || error.message || '撤销好友请求失败'
-    friendRequestMessageClass.value = 'error'
   }
 }
 
@@ -620,7 +558,7 @@ onUnmounted(() => {
             <div class="version-value">https://github.com/gamerunwuyazi/simple-chat-room</div>
           </div>
           <div class="version-item">
-            <div class="version-label">copyright(c) 2026 无崖子——gamerunwuyazi</div>
+            <div class="version-label">copyright(c) 2025-{{ currentYear }} 无崖子——gamerunwuyazi</div>
             <div class="version-value">版权所有 侵权必究</div>
           </div>
         </div>
@@ -641,7 +579,7 @@ onUnmounted(() => {
       </div>
 
       <div v-if="currentSetting === 'friend-verification'" class="settings-detail">
-        <h2>{{ friendVerificationEnabled ? '好友申请' : '好友验证' }}</h2>
+        <h2>好友验证</h2>
 
         <div class="friend-verification-section">
           <div class="verification-toggle">
@@ -655,87 +593,6 @@ onUnmounted(() => {
             <p class="toggle-description">
               {{ friendVerificationEnabled ? '开启后，他人添加你为好友时需要经过你的同意' : '关闭后，他人可以直接添加你为好友' }}
             </p>
-          </div>
-
-          <div v-if="!friendVerificationEnabled" class="requests-section">
-            <h3>发送的好友申请（等待对方接受）</h3>
-            <div v-if="sentFriendRequestsFromStore.length === 0" class="empty-requests">
-              <p>暂无发送的好友申请</p>
-            </div>
-            <div v-else class="requests-list">
-              <div v-for="request in sentFriendRequestsFromStore" :key="request.id" class="request-item pending">
-                <div class="request-user-info">
-                  <img v-if="request.avatar_url" :src="SERVER_URL + request.avatar_url" alt="头像" class="request-avatar">
-                  <div v-else class="request-avatar-placeholder">{{ request.nickname?.charAt(0)?.toUpperCase() || 'U' }}
-                  </div>
-                  <div class="request-details">
-                    <div class="request-nickname">{{ request.nickname || request.username }}</div>
-                    <div class="request-time">等待对方接受 · {{ formatTime(request.created_at) }}</div>
-                  </div>
-                </div>
-                <div class="request-actions">
-                  <button class="cancel-btn-small" @click="handleCancelFriendRequest(request.id)">撤销</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="friendVerificationEnabled" class="friend-requests-container">
-            <div class="requests-section">
-              <h3>收到的好友申请（等待我接受）</h3>
-              <div v-if="receivedFriendRequestsFromStore.length === 0" class="empty-requests">
-                <p>暂无收到的好友申请</p>
-              </div>
-              <div v-else class="requests-list">
-                <div v-for="request in receivedFriendRequestsFromStore" :key="request.id" class="request-item">
-                  <div class="request-user-info">
-                    <img v-if="request.avatar_url" :src="SERVER_URL + request.avatar_url" alt="头像"
-                      class="request-avatar">
-                    <div v-else class="request-avatar-placeholder">{{ request.nickname?.charAt(0)?.toUpperCase() || 'U'
-                      }}</div>
-                    <div class="request-details">
-                      <div class="request-nickname">{{ request.nickname || request.username }}<span
-                          class="request-time"> · {{ formatTime(request.created_at) }}</span></div>
-                      <div class="request-message" :title="request.request_message">{{ request.request_message ||
-                        '未设置留言' }}</div>
-                    </div>
-                  </div>
-                  <div class="request-actions">
-                    <button class="accept-btn" @click="handleAcceptFriendRequest(request.id)">接受</button>
-                    <button class="reject-btn" @click="handleRejectFriendRequest(request.id)">拒绝</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="requests-section" style="margin-top: 30px;">
-              <h3>发送的好友申请（等待对方接受）</h3>
-              <div v-if="sentFriendRequestsFromStore.length === 0" class="empty-requests">
-                <p>暂无发送的好友申请</p>
-              </div>
-              <div v-else class="requests-list">
-                <div v-for="request in sentFriendRequestsFromStore" :key="request.id" class="request-item pending">
-                  <div class="request-user-info">
-                    <img v-if="request.avatar_url" :src="SERVER_URL + request.avatar_url" alt="头像"
-                      class="request-avatar">
-                    <div v-else class="request-avatar-placeholder">{{ request.nickname?.charAt(0)?.toUpperCase() || 'U'
-                      }}</div>
-                    <div class="request-details">
-                      <div class="request-nickname">{{ request.nickname || request.username }}</div>
-                      <div class="request-time">等待对方接受 · {{ formatTime(request.created_at) }}</div>
-                    </div>
-                  </div>
-                  <div class="request-actions">
-                    <button class="cancel-btn-small" @click="handleCancelFriendRequest(request.id)">撤销</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div v-if="friendRequestMessage" :class="'form-message ' + friendRequestMessageClass"
-            style="margin-top: 15px;">
-            {{ friendRequestMessage }}
           </div>
         </div>
       </div>
@@ -774,22 +631,8 @@ onUnmounted(() => {
   color: #8b949e;
 }
 
-:global(body.dark-mode) .empty-requests {
-  background: #0d1117 !important;
-  color: #8b949e !important;
-  border: 1px solid #30363d !important;
-}
-
-:global(body.dark-mode) .request-time {
-  color: #8b949e;
-}
-
 :global(body.dark-mode) .loading-state {
   color: #8b949e;
-}
-
-:global(body.dark-mode) .requests-section h3 {
-  color: #c9d1d9;
 }
 
 :global(body.dark-mode) .slider {
@@ -906,187 +749,6 @@ input:checked+.slider:before {
   font-size: 14px;
   margin: 0;
   padding-left: 0;
-}
-
-.friend-requests-container {
-  margin-top: 20px;
-}
-
-.requests-section h3 {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 15px;
-  color: #333;
-}
-
-.empty-requests {
-  text-align: center;
-  padding: 30px;
-  color: #999;
-  background: #f8f9fa;
-  border-radius: 8px;
-}
-
-.requests-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-:global(.request-item) {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 15px;
-  background: #fff;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  transition: all 0.2s;
-}
-
-:global(.request-item.pending) {
-  background: #fff;
-  border: 1px solid #e0e0e0;
-}
-
-:global(body.dark-mode .request-item) {
-  background: #161b22 !important;
-  border-color: #30363d !important;
-  color: #c9d1d9 !important;
-}
-
-:global(body.dark-mode .request-item.pending) {
-  background: #161b22 !important;
-  border-color: #30363d !important;
-  color: #c9d1d9 !important;
-}
-
-:global(.request-item:hover) {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  border-color: #2196F3;
-}
-
-:global(.request-user-info) {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 1;
-}
-
-:global(.request-avatar) {
-  width: 45px;
-  height: 45px;
-  border-radius: 50%;
-  object-fit: cover;
-}
-
-:global(.request-avatar-placeholder) {
-  width: 45px;
-  height: 45px;
-  border-radius: 50%;
-  background-color: #3498db;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-size: 18px;
-}
-
-:global(.request-details) {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-:global(.request-nickname) {
-  font-size: 15px;
-  font-weight: 500;
-  color: #333;
-}
-
-:global(body.dark-mode .request-nickname) {
-  color: #e6edf3;
-}
-
-:global(.request-message) {
-  font-size: 13px;
-  color: #999;
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 200px;
-}
-
-:global(body.dark-mode .request-message) {
-  color: #8b949e;
-}
-
-:global(.request-time) {
-  font-size: 13px;
-  color: #999;
-}
-
-:global(body.dark-mode .request-time) {
-  color: #8b949e;
-}
-
-:global(.request-actions) {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-:global(.accept-btn),
-:global(.reject-btn) {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 5px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-weight: 500;
-}
-
-:global(.accept-btn) {
-  background: #4CAF50;
-  color: white;
-}
-
-:global(.accept-btn:hover) {
-  background: #45a049;
-}
-
-:global(.reject-btn) {
-  background: #f44336;
-  color: white;
-}
-
-:global(.reject-btn:hover) {
-  background: #da190b;
-}
-
-:global(.cancel-btn-small) {
-  padding: 6px 16px;
-  border: none;
-  border-radius: 5px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-  font-weight: 500;
-  background: #ff9800;
-  color: white;
-}
-
-:global(.cancel-btn-small:hover) {
-  background: #f57c00;
-}
-
-:global(.request-status) {
-  color: #ff9800;
-  font-size: 14px;
-  font-weight: 500;
 }
 
 .loading-state {

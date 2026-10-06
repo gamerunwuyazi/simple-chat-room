@@ -1,5 +1,8 @@
 <template>
-  <div class="chat-content" data-content="public-chat">
+  <!-- /chat 右侧面板：默认渲染主聊天室，点击二级侧边栏的聊天项时切换渲染群聊/私聊页面（不跳转路由） -->
+  <GroupChat v-if="sessionStore.chatPanelType === 'group'" />
+  <PrivateChat v-else-if="sessionStore.chatPanelType === 'private'" />
+  <div v-else class="chat-content" data-content="public-chat">
     <div id="markdownToolbar" class="markdown-toolbar" v-if="showMarkdownToolbar">
       <button class="markdown-btn" @click="insertMarkdown('**', '**', '粗体文本')">粗体</button>
       <button class="markdown-btn" @click="insertMarkdown('_', '_', '斜体文本')">斜体</button>
@@ -250,6 +253,7 @@ import { useDraftStore } from "@/stores/draftStore";
 import { useGroupStore } from "@/stores/groupStore";
 import { useFriendStore } from "@/stores/friendStore";
 import { useUnreadStore } from "@/stores/unreadStore";
+import { useSessionStore } from "@/stores/sessionStore";
 import { 
   uploadImage,
   uploadFile,
@@ -264,6 +268,8 @@ import { clearContentEditable } from "@/utils/chat/message.js";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
+import GroupChat from "@/views/GroupChat.vue";
+import PrivateChat from "@/views/PrivateChat.vue";
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -283,7 +289,11 @@ function navigateToPrevSearchResult() {
 const groupStore = useGroupStore();
 const friendStore = useFriendStore();
 const unreadStore = useUnreadStore();
+const sessionStore = useSessionStore();
 const route = useRoute();
+
+// 面板类型 chatPanelType 持久保存在 sessionStore 中（'main'|'private'|'group'），
+// 切换路由离开再回来时恢复上次打开的面板；嵌入的群聊/私聊组件与专用页面共用同一套会话恢复逻辑
 
 let scrollingInitialized = { public: false };
 
@@ -397,6 +407,41 @@ watch(
           scrollingInitialized.public = true;
         }
       }, 600);
+
+      // 切换到主聊天室时绑定一次性点击事件清除未读
+      setTimeout(() => {
+        bindOneTimePublicUnreadClear();
+      }, 100);
+    }
+  }
+);
+
+watch(
+  () => sessionStore.chatPanelType,
+  (panelType) => {
+    // 从嵌入的群聊/私聊面板切回主聊天室（不经过路由变化）
+    if (panelType === 'main') {
+      if (inputStore.mainMessageInput) {
+        nextTick(() => {
+          const mainMessageInput = document.getElementById('messageInput');
+          if (mainMessageInput) {
+            mainMessageInput.innerHTML = inputStore.mainMessageInput;
+            inputStore.mainMessageInput = '';
+          }
+        });
+      }
+
+      scrollToBottom();
+      setTimeout(() => {
+        scrollToBottom();
+      }, 200);
+      setTimeout(() => {
+        scrollToBottom();
+      }, 500);
+      inputStore.clearQuotedMessage();
+      nextTick(() => {
+        initializeScrollLoading(true);
+      });
 
       // 切换到主聊天室时绑定一次性点击事件清除未读
       setTimeout(() => {

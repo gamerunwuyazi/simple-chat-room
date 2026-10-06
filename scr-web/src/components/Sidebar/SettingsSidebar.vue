@@ -1,8 +1,5 @@
 <script setup>
-import { computed, ref, onMounted } from 'vue';
-import { useBaseStore } from '@/stores/baseStore';
-
-const baseStore = useBaseStore();
+import { ref, onMounted } from 'vue';
 
 const isDarkMode = ref(false);
 
@@ -18,15 +15,6 @@ function toggleDarkMode() {
   } catch {}
 }
 
-const friendRequestUnreadCount = computed(() => {
-  return Array.isArray(baseStore.receivedFriendRequests) ? baseStore.receivedFriendRequests.length : 0;
-});
-
-const friendVerificationLabel = computed(() => {
-  return baseStore.friendVerification ? '好友申请' : '好友验证';
-});
-
-// 处理设置项点击
 function handleSettingItemClick(settingId) {
   // 派发事件
   window.dispatchEvent(new CustomEvent('settings-item-click', {
@@ -57,8 +45,7 @@ function handleSettingItemClick(settingId) {
                     <span class="setting-value">{{ isDarkMode ? '开' : '关' }}</span>
                 </li>
                 <li class="settings-item" data-setting-id="friend-verification" @click="handleSettingItemClick('friend-verification')">
-                    {{ friendVerificationLabel }}
-                    <span v-if="friendRequestUnreadCount > 0" class="unread-count">{{ friendRequestUnreadCount > 99 ? '99+' : friendRequestUnreadCount }}</span>
+                    好友验证
                 </li>
                 <li class="settings-item" data-setting-id="shortcut-settings" @click="handleSettingItemClick('shortcut-settings')">快捷键</li>
                 <li class="settings-item" data-setting-id="clear-unread-counts" @click="handleSettingItemClick('clear-unread-counts')">清除未读计数</li>

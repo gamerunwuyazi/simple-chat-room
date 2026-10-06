@@ -2,15 +2,17 @@
 /* eslint-disable vue/multi-word-component-names */
 import { ref, computed, onUnmounted } from 'vue';
 
+import { setFriendDisturb } from '@/api/friend.js';
+import { usePagedList, searchSorter } from '@/composables/usePagedList';
 import { useBaseStore } from '@/stores/baseStore';
 import { useUserStore } from '@/stores/userStore';
 import { useFriendStore } from '@/stores/friendStore';
 import { useUnreadStore } from '@/stores/unreadStore';
 import { useDraftStore } from '@/stores/draftStore';
 import { useModalStore } from '@/stores/modalStore';
+import { useSessionStore } from '@/stores/sessionStore';
 import { useStorageStore } from '@/stores/storageStore';
 import { switchToPrivateChat } from '@/utils/chat/private';
-import { setFriendDisturb } from '@/api/friend.js';
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -18,6 +20,7 @@ const friendStore = useFriendStore();
 const unreadStore = useUnreadStore();
 const draftStore = useDraftStore();
 const modalStore = useModalStore();
+const sessionStore = useSessionStore();
 const storageStore = useStorageStore();
 
 onUnmounted(() => {
@@ -28,6 +31,9 @@ onUnmounted(() => {
 
 // 私信搜索状态
 const privateChatSearchKeyword = ref('');
+
+// 侧边栏根节点即滚动容器（overflow-y: auto），供分页滚动监听与位置恢复使用
+const sidebarRef = ref(null);
 
 // 右键菜单相关
 const showContextMenu = ref(false);
@@ -153,16 +159,25 @@ function isUserOnline(userId) {
   return userStore.onlineUsers.some(user => String(user.id) === String(userId));
 }
 
+// 搜索不受分页影响：始终对完整好友列表过滤；
+// 搜索结果排序按匹配率 + 最后消息时间（匹配率相同按最近活跃从近到远）
 const filteredFriendsList = computed(() => {
   const allFriends = [...friendStore.friendsList];
   if (!privateChatSearchKeyword.value) {
     return allFriends;
   }
   const keyword = privateChatSearchKeyword.value.toLowerCase();
-  return allFriends.filter(friend => {
+  const filtered = allFriends.filter(friend => {
     const displayName = getFriendDisplayName(friend).toLowerCase();
     return displayName.includes(keyword) || (friend.username || '').toLowerCase().includes(keyword);
   });
+  return filtered.sort(searchSorter(privateChatSearchKeyword.value, friend => getFriendDisplayName(friend)));
+});
+
+// 分页：只渲染前 20 条，滚动到底再追加后 10 条；搜索变化时重置回顶部
+const { pagedList: pagedFriendsList } = usePagedList(filteredFriendsList, {
+  containerRef: sidebarRef,
+  resetTrigger: privateChatSearchKeyword
 });
 
 // 清除搜索
@@ -170,9 +185,22 @@ function clearPrivateChatSearch() {
   privateChatSearchKeyword.value = '';
 }
 
+// 收到待处理的好友申请数（"新的朋友"置顶项角标）
+const friendRequestCount = computed(() => (
+  Array.isArray(baseStore.receivedFriendRequests) ? baseStore.receivedFriendRequests.length : 0
+));
+
+// 点击置顶"新的朋友"：取消选中好友，右侧面板切换到好友申请列表
+function handleNewFriendsClick() {
+  hideContextMenu();
+  sessionStore.setCurrentPrivateChatUserId(null);
+  sessionStore.showFriendRequests = true;
+}
+
 // 处理好友点击
 function handleFriendClick(friend) {
   hideContextMenu();
+  sessionStore.showFriendRequests = false;
   const avatarUrl = friend.avatarUrl || friend.avatar_url || friend.avatar || '';
   switchToPrivateChat(friend.id, friend.nickname, friend.username, avatarUrl);
 }
@@ -229,7 +257,7 @@ function handleSearchUserClick() {
 </script>
 
 <template>
-  <div id="secondary-sidebar">
+  <div id="secondary-sidebar" ref="sidebarRef">
     <div class="secondary-content" data-content="private-chat">
         <div class="sidebar-section">
             <div class="section-header">
@@ -240,8 +268,25 @@ function handleSearchUserClick() {
                 </div>
             </div>
             <ul class="user-list" id="friendsList">
+                <!-- 新的朋友：置顶，不参与分页排序，始终显示（好友申请入口） -->
+                <li class="friend-item new-friends-item"
+                    :class="{ active: sessionStore.showFriendRequests }"
+                    @click="handleNewFriendsClick">
+                    <span class="user-avatar-wrapper">
+                        <span class="user-avatar"><i class="fas fa-user-plus"></i></span>
+                    </span>
+                    <div class="friend-info">
+                        <span class="friend-name">新的朋友</span>
+                        <span class="friend-last-message">{{ friendRequestCount > 0 ? '你有新的好友申请' : '没有新的好友申请' }}</span>
+                    </div>
+                    <div v-if="friendRequestCount > 0" class="unread-count private-unread-count">{{ friendRequestCount > 99 ? '99+' : friendRequestCount }}</div>
+                </li>
+
+                <!-- 分割线：分隔置顶"新的朋友"与普通好友列表 -->
+                <li class="chat-list-divider"></li>
+
                 <li v-if="friendStore.friendsList.length === 0" class="empty-friends">暂无好友，请先添加好友</li>
-                <li v-else v-for="friend in filteredFriendsList" :key="friend.id" 
+                <li v-else v-for="friend in pagedFriendsList" :key="friend.id" 
                     class="friend-item"
                     :data-user-id="friend.id"
                     :data-user-nickname="friend.nickname"
@@ -396,6 +441,47 @@ function handleSearchUserClick() {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-top: 2px;
+}
+
+/* 置顶"新的朋友"项：突出显示，选中态高亮 */
+.user-list .new-friends-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-list .new-friends-item .user-avatar {
+  color: #fff;
+  font-size: 14px;
+}
+
+.user-list .new-friends-item.active {
+  background-color: #e3f0fc;
+}
+
+/* 置顶"新的朋友"与普通好友之间的分割线 */
+.user-list .chat-list-divider {
+  height: 0;
+  padding: 0;
+  margin: 4px 0 8px 0;
+  border: none;
+  border-top: 1px solid #cbd5e1;
+  cursor: default;
+  pointer-events: none;
+}
+
+.user-list .chat-list-divider:hover {
+  background-color: transparent;
+  transform: none;
+}
+
+body.dark-mode .user-list .new-friends-item .user-avatar {
+  color: #fff;
+}
+
+body.dark-mode .user-list .new-friends-item.active {
+  background-color: #2c3e50;
 }
 
 .draft-text {

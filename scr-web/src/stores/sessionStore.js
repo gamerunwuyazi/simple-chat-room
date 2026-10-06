@@ -16,6 +16,11 @@ export const useSessionStore = defineStore('session', () => {
   const currentActiveChat = ref('main');
   const currentSendChatType = ref('main');
   const selectedGroupIdForCard = ref(null);
+  // /chat 右侧聊天面板当前渲染的类型：main=聊天室，private=私信，group=群组
+  // 主聊天室二级侧边栏点击聊天项时切换，不跳转路由
+  const chatPanelType = ref('main');
+  // 私信面板内是否显示"新的朋友"好友申请列表（点击私信侧边栏置顶的"新的朋友"置位）
+  const showFriendRequests = ref(false);
 
   function setCurrentGroupId(id) {
     const groupStore = useGroupStore();
@@ -71,6 +76,12 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  function setChatPanelType(type) {
+    if (type === 'main' || type === 'private' || type === 'group') {
+      chatPanelType.value = type;
+    }
+  }
+
   return {
     currentGroupId,
     currentGroupName,
@@ -81,8 +92,11 @@ export const useSessionStore = defineStore('session', () => {
     currentActiveChat,
     currentSendChatType,
     selectedGroupIdForCard,
+    chatPanelType,
+    showFriendRequests,
     setCurrentGroupId,
     setCurrentPrivateChatUserId,
-    setCurrentActiveChat
+    setCurrentActiveChat,
+    setChatPanelType
   };
 });

@@ -315,39 +315,11 @@ export function setupSocketIO(server, { pool, redisClient, isIPBanned, getUserSe
           console.error('更新用户最后上线时间失败:', err.message);
         }
         
-        // 广播更新后的用户列表
-        const onlineUsersList = await onlineUserManager.getAllOnlineUsers();
-        const onlineUsersArray = onlineUsersList.map(u => ({
-          id: u.id,
-          nickname: u.nickname,
-          avatarUrl: u.avatarUrl,
-          isOnline: true
-        }));
-
-        const onlineUserIds = new Set(onlineUsersArray.map(u => u.id));
-        
-        const [offlineUsersData] = await pool.execute(`
-          SELECT id, nickname, last_online, avatar_url as avatarUrl 
-          FROM scr_users 
-          WHERE last_online IS NOT NULL 
-          AND last_online >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-          ORDER BY last_online DESC
-        `);
-
-        const offlineUsersArray = offlineUsersData
-          .filter(u => !onlineUserIds.has(u.id))
-          .map(u => ({
-            id: u.id,
-            nickname: u.nickname,
-            avatarUrl: u.avatarUrl,
-            isOnline: false,
-            lastOnline: u.last_online
-          }));
-
-        // 只向已认证用户广播用户列表
-        broadcastProducer?.enqueue('authenticated_users', 'users-list', {
-          online: onlineUsersArray,
-          offline: offlineUsersArray
+        // 集体广播该用户的下线事件（含用户信息），不再广播全量用户列表
+        broadcastProducer?.enqueue('authenticated_users', 'user-offline', {
+          id: user.id,
+          nickname: user.nickname,
+          avatarUrl: user.avatarUrl
         });
       }
       

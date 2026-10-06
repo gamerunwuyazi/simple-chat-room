@@ -412,6 +412,9 @@
                     <span class="friend-id">ID: {{ userProfileDisplayId }}</span>
                     <i class="copy-btn fas fa-copy" title="复制用户ID" @click="copyUserId"></i>
                   </div>
+                  <div v-if="userProfileLastOnlineText" class="friend-last-online-row">
+                    <span class="friend-last-online" :class="{ 'is-online': userProfileIsOnline }">{{ userProfileLastOnlineText }}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1461,6 +1464,32 @@ const userProfileDisplayId = computed(() => {
   return profile.username || profile.id || '';
 });
 
+const userProfileIsOnline = computed(() => {
+  const profile = modalStore.modalData.userProfile;
+  return profile ? isUserOnline(profile.id) : false;
+});
+
+// 相对时间格式化（用于"最后在线"展示）
+function formatRelativeTime(time) {
+  const date = new Date(time);
+  if (isNaN(date.getTime())) return '';
+  const diff = Date.now() - date.getTime();
+  if (diff < 60 * 1000) return '刚刚';
+  if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}分钟前`;
+  if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)}小时前`;
+  if (diff < 7 * 24 * 60 * 60 * 1000) return `${Math.floor(diff / 86400000)}天前`;
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+const userProfileLastOnlineText = computed(() => {
+  const profile = modalStore.modalData.userProfile;
+  if (!profile) return '';
+  if (userProfileIsOnline.value) return '当前在线';
+  if (!profile.last_online) return '';
+  return `最后在线：${formatRelativeTime(profile.last_online)}`;
+});
+
 const userProfileIsMuted = computed(() => {
   const userId = modalStore.modalData.userProfile?.id;
   if (!userId) return false;
@@ -1608,7 +1637,7 @@ async function showGroupCardPopupVue(event, groupData) {
 function handleGroupCardPopupSendMessage() {
   const data = groupCardPopupData.value;
   if (data) {
-    switchToGroupChat(data.group_id, data.group_name, data.avatar_url || data.avatarUrl || '');
+    switchToGroupChat(data.group_id, data.group_name);
     setTimeout(() => {
       groupStore.updateGroupSessionTime(data.group_id);
     }, 200);
@@ -3240,6 +3269,7 @@ async function fetchUserInfo(userId) {
         signature: data.user.signature || '',
         gender: data.user.gender,
         friend_verification: data.user.friend_verification,
+        last_online: data.user.last_online,
         avatarUrl: data.user.avatar_url || data.user.avatarUrl || data.user.avatar
       };
     }
