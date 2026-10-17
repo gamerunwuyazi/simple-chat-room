@@ -77,8 +77,9 @@ function switchToPrivateChat(userId, nickname, username, avatarUrl, options = {}
 
   if (sessionStore) {
     sessionStore.setCurrentPrivateChatUserId(userId);
-    // 进入具体私聊时退出"新的朋友"好友申请面板
+    // 进入具体私聊时退出"新的朋友"好友申请面板与"黑名单"面板
     sessionStore.showFriendRequests = false;
+    sessionStore.showBlackList = false;
   }
   
   if (friendStore && friendStore.setPrivateAllLoaded) {

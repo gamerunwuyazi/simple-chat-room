@@ -52,7 +52,7 @@ import { computed, ref } from 'vue';
 import { useBaseStore } from '@/stores/baseStore';
 import { useGroupStore } from '@/stores/groupStore';
 import { useFriendStore } from '@/stores/friendStore';
-import { usePublicStore } from '@/stores/publicStore';
+import { useUnifiedStore } from '@/stores/unifiedStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useMessageHighlight } from '@/composables/useMessageHighlight';
 import { findUserInfo } from '@/utils/chat/userLookup';
@@ -69,14 +69,14 @@ defineEmits(['close']);
 const baseStore = useBaseStore();
 const groupStore = useGroupStore();
 const friendStore = useFriendStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const sessionStore = useSessionStore();
 const groupCardAvatarLoadFailed = ref(false);
 const senderAvatarError = ref(false);
 const { scrollAndHighlight } = useMessageHighlight();
 
 function getQuotedUserInfo() {
-  return findUserInfo(props.quotedMessage, { sessionStore, groupStore, friendStore, publicStore, baseStore });
+  return findUserInfo(props.quotedMessage, { sessionStore, groupStore, friendStore, unifiedStore, baseStore });
 }
 
 const resolvedUserInfo = computed(() => getQuotedUserInfo());

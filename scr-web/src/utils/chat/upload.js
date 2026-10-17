@@ -5,7 +5,7 @@ import {
   useBaseStore,
   useFriendStore,
   useGroupStore,
-  usePublicStore,
+  useUnifiedStore,
   useSessionStore,
   useStorageStore,
   getChatSocket
@@ -26,8 +26,8 @@ let prevPrivateScrollHeight = 0;
 let prevPrivateScrollTop = 0;
 let prevGroupScrollHeight = 0;
 let prevGroupScrollTop = 0;
-let prevPublicScrollHeight = 0;
-let prevPublicScrollTop = 0;
+let prevUnifiedScrollHeight = 0;
+let prevUnifiedScrollTop = 0;
 // 记录触发加载更多的容器引用，用于恢复滚动位置
 let loadingContainer = null;
 let loadingIsGroup = false;
@@ -583,8 +583,8 @@ function restoreScrollPosition() {
     savedHeight = prevGroupScrollHeight;
     savedTop = prevGroupScrollTop;
   } else {
-    savedHeight = prevPublicScrollHeight;
-    savedTop = prevPublicScrollTop;
+    savedHeight = prevUnifiedScrollHeight;
+    savedTop = prevUnifiedScrollTop;
   }
 
   // 清除保存的位置
@@ -592,8 +592,8 @@ function restoreScrollPosition() {
   prevPrivateScrollTop = 0;
   prevGroupScrollHeight = 0;
   prevGroupScrollTop = 0;
-  prevPublicScrollHeight = 0;
-  prevPublicScrollTop = 0;
+  prevUnifiedScrollHeight = 0;
+  prevUnifiedScrollTop = 0;
 
   if (savedHeight <= 0) return;
 
@@ -616,8 +616,8 @@ function restoreScrollPosition() {
         const groupStore = useGroupStore();
         isAllLoaded = groupStore?.isGroupAllLoaded?.(sessionStore.currentGroupId) || false;
       } else {
-        const publicStore = usePublicStore();
-        isAllLoaded = publicStore?.isPublicAllLoaded?.() || false;
+        const unifiedStore = useUnifiedStore();
+        isAllLoaded = unifiedStore?.isUnifiedAllLoaded?.() || false;
       }
 
       if (!isAllLoaded) {
@@ -638,7 +638,7 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
     const baseStore = useBaseStore();
     const friendStore = useFriendStore();
     const groupStore = useGroupStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const storageStore = useStorageStore();
     
     // 前置校验：类型标志和对应 ID 必须匹配，否则直接返回
@@ -659,8 +659,8 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
         isAllLoaded = groupStore.isGroupAllLoaded(currentGroupId);
       }
     } else {
-      if (publicStore && publicStore.isPublicAllLoaded) {
-        isAllLoaded = publicStore.isPublicAllLoaded();
+      if (unifiedStore && unifiedStore.isUnifiedAllLoaded) {
+        isAllLoaded = unifiedStore.isUnifiedAllLoaded();
       }
     }
     
@@ -701,8 +701,8 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
         prevGroupScrollHeight = prevScrollHeight;
         prevGroupScrollTop = prevScrollTop;
       } else {
-        prevPublicScrollHeight = prevScrollHeight;
-        prevPublicScrollTop = prevScrollTop;
+        prevUnifiedScrollHeight = prevScrollHeight;
+        prevUnifiedScrollTop = prevScrollTop;
       }
 
       let olderThan = null;
@@ -712,8 +712,8 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
         messages = friendStore.privateMessages[sessionStore.currentPrivateChatUserId] || [];
       } else if (isGroup && groupStore && groupStore.groupMessages && sessionStore.currentGroupId) {
         messages = groupStore.groupMessages[sessionStore.currentGroupId] || [];
-      } else if (publicStore && publicStore.publicMessages) {
-        messages = publicStore.publicMessages || [];
+      } else if (unifiedStore && unifiedStore.unifiedMessages) {
+        messages = unifiedStore.unifiedMessages || [];
       }
 
       if (messages.length > 0) {
@@ -726,7 +726,7 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
       } else if (isGroup && sessionStore?.currentGroupId) {
         fullMessages = storageStore && storageStore.fullGroupMessages && storageStore.fullGroupMessages[sessionStore.currentGroupId];
       } else {
-        fullMessages = storageStore && storageStore.fullPublicMessages;
+        fullMessages = storageStore && storageStore.fullUnifiedMessages;
       }
       
       if (fullMessages && fullMessages.length > messages.length) {
@@ -746,7 +746,7 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
           } else if (isGroup && sessionStore?.currentGroupId) {
             groupStore.prependGroupMessages(sessionStore.currentGroupId, messagesToAdd);
           } else {
-            publicStore.prependPublicMessages(messagesToAdd);
+            unifiedStore.prependUnifiedMessages(messagesToAdd);
           }
           
           resetLoadingState(containerId);
@@ -788,7 +788,7 @@ async function handleScroll(e, container, isGroup, isPrivate = false) {
             } else if (isGroup && sessionStore?.currentGroupId) {
               groupStore.prependGroupMessages(sessionStore.currentGroupId, messagesToAdd);
             } else {
-              publicStore.prependPublicMessages(messagesToAdd);
+              unifiedStore.prependUnifiedMessages(messagesToAdd);
             }
             
             resetLoadingState(containerId);

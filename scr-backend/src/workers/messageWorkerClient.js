@@ -23,9 +23,15 @@ function getWorkerPath() {
   return path.join(process.cwd(), 'src', 'workers', 'messageWorker.js');
 }
 
-const POOL_SIZE = 2;
-// 连接健康探测必须在 50ms 内完成；45ms 未收到 ready 就立即熔断。
-const CONNECTION_PROBE_TIMEOUT_MS = 45;
+// Worker 池大小可配置：每个 worker 是独立的 V8 isolate，且各自持有 MySQL/Redis 连接池，
+// 实测单个 worker 常驻 RSS 约 30~50MB（线程级 V8 堆 + 连接缓冲）。
+// 低流量（如 DAU 数十）场景 1 个即可；高并发再调大，避免用内存换那点并发。
+const POOL_SIZE = Math.max(1, parseInt(process.env.MESSAGE_WORKER_POOL_SIZE || '1', 10));
+// 主线程侧探测超时：只作为「任务迟迟不返回」的软性兜底，绝不用于熔断 worker。
+// 绝不能用几十毫秒——worker 侧自身健康探测存在「探测失败 → destroy → 重连」重试，
+// 最坏耗时本就可能超过 45ms；主线程若抢先在 45ms 熔断并 terminate 整个 isolate，
+// 就会在每次探测抖动时反复销毁/重建 V8 isolate（原生内存棘轮式抬升）。
+const CONNECTION_PROBE_TIMEOUT_MS = 5000;
 // 探测通过后，业务查询仍沿用独立的总任务超时。
 const TASK_TIMEOUT_MS = 30000;
 
@@ -142,9 +148,11 @@ export function runMessageTask(type, params) {
     pending.set(id, pendingTask);
     pendingTask.probeTimer = setTimeout(() => {
       if (!pending.has(id) || pendingTask.ready) return;
+      // 探测阶段只是「还没 ready」，不能据此判定连接不可信：
+      // 果断拒绝本次任务让调用方回退主线程即可，但保留 worker 存活，
+      // 避免 terminate/重建 isolate 造成的原生内存 churn。
       pending.delete(id);
       clearTimeout(pendingTask.taskTimer);
-      replaceWorker(pendingTask.worker, 'MySQL 连接健康探测超过 45ms');
       reject(new Error('消息 Worker 连接健康探测超时'));
     }, CONNECTION_PROBE_TIMEOUT_MS);
     pendingTask.taskTimer = setTimeout(() => {

@@ -3,6 +3,9 @@
     <!-- 新的朋友：好友申请面板（微信风格，点击私信侧边栏置顶项打开） -->
     <FriendRequestsPanel v-if="sessionStore.showFriendRequests" />
 
+    <!-- 黑名单：已拉黑用户面板（点击私信侧边栏置顶项打开） -->
+    <BlackListPanel v-else-if="sessionStore.showBlackList" />
+
     <div v-else-if="!isPrivateChatVisible" class="empty-chat-state">
       <h3>选择一个好友开始聊天</h3>
       <p>请从左侧好友列表中选择一个好友，开始私聊会话</p>
@@ -36,7 +39,7 @@
         <button class="markdown-btn" @click="insertMarkdown('- ', '', '列表项')">列表</button>
         <button class="markdown-btn" @click="insertMarkdown('> ', '', '引用文本')">引用</button>
         <button class="markdown-btn" @click="insertMarkdown('[链接描述](', ')', '链接文本')">链接</button>
-        <button class="markdown-btn" @click="insertMarkdown('![图片无法显示时的文字](', ')', '图片URL')">图片</button>
+        <button class="markdown-btn" @click="insertMarkdown('![图片描述](', ')', '图片URL')">图片</button>
       </div>
 
       <div id="privateMessageContainer" ref="privateMessageContainerRef">
@@ -180,6 +183,7 @@ import { useRoute } from "vue-router";
 import PrivateMessageItem from "@/components/MessageItem/PrivateMessageItem.vue";
 import QuotedMessagePreview from "@/components/MessageItem/QuotedMessagePreview.vue";
 import FriendRequestsPanel from "@/components/FriendRequestsPanel.vue";
+import BlackListPanel from "@/components/BlackListPanel.vue";
 import { useBaseStore } from "@/stores/baseStore";
 import { useUserStore } from "@/stores/userStore";
 import { useFriendStore } from "@/stores/friendStore";
@@ -187,7 +191,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useInputStore } from "@/stores/inputStore";
 import { useDraftStore } from "@/stores/draftStore";
 import { useGroupStore } from "@/stores/groupStore";
-import { usePublicStore } from "@/stores/publicStore";
+import { useUnifiedStore } from "@/stores/unifiedStore";
 import {
   setActiveChat,
   loadPrivateChatHistory,
@@ -223,7 +227,7 @@ function navigateToPrevSearchResult() {
   navPrev(searchResults.value, scrollToMessage);
 }
 const groupStore = useGroupStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const SERVER_URL = baseStore.SERVER_URL || import.meta.env.VITE_SERVER_URL || '';
 
 let restoringPrivateDraft = false;
@@ -831,6 +835,14 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('private-switched', handlePrivateSwitched);
+  // 离开私聊时保存草稿（消息页嵌入面板或独立路由页卸载均触发，此时 ref 仍指向输入框）
+  const privateUserId = sessionStore.currentPrivateChatUserId;
+  const inputEl = privateMessageInputRef.value;
+  if (privateUserId && inputEl && !restoringPrivateDraft) {
+    const content = inputEl.textContent || inputEl.innerHTML || '';
+    draftStore.saveDraft('private', privateUserId, content);
+    draftStore.setLastMessageToDraft('private', privateUserId);
+  }
 });
 
 watch(
@@ -937,7 +949,7 @@ watch(
       inputStore.clearQuotedMessage();
       groupStore.clearOtherGroupMessages(null);
       friendStore.clearOtherPrivateMessages(sessionStore.currentPrivateChatUserId);
-      publicStore.clearPublicMessagesExceptRecent();
+      unifiedStore.clearUnifiedMessagesExceptRecent();
       nextTick(() => {
         initializeScrollLoading(true);
       });

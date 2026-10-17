@@ -4,7 +4,8 @@ import { ref } from 'vue';
 export const useDraftStore = defineStore('draft', () => {
   const drafts = ref({
     groups: {},
-    private: {}
+    private: {},
+    main: ''
   });
 
   let _getDependencies = null;
@@ -21,6 +22,12 @@ export const useDraftStore = defineStore('draft', () => {
   function saveDraft(chatType, id, content) {
     const deps = getDeps();
     const { groupsList, friendsList, getGroupLastMessage, getPrivateLastMessage } = deps || {};
+
+    // 主聊天室草稿：单槽字符串，仅在切换离开主聊天室时保存，用于列表项显示
+    if (chatType === 'main') {
+      drafts.value.main = content || '';
+      return;
+    }
 
     if (chatType === 'group' && id) {
       drafts.value.groups[id] = content;
@@ -42,6 +49,7 @@ export const useDraftStore = defineStore('draft', () => {
   }
 
   function getDraft(chatType, id) {
+    if (chatType === 'main') return drafts.value.main || '';
     if (chatType === 'group' && id) return drafts.value.groups[id] || '';
     if (chatType === 'private' && id) return drafts.value.private[id] || '';
     return '';
@@ -50,6 +58,11 @@ export const useDraftStore = defineStore('draft', () => {
   function clearDraft(chatType, id) {
     const deps = getDeps();
     const { groupsList, friendsList, getGroupLastMessage, getPrivateLastMessage } = deps || {};
+
+    if (chatType === 'main') {
+      drafts.value.main = '';
+      return;
+    }
 
     if (chatType === 'group' && id) {
       delete drafts.value.groups[id];

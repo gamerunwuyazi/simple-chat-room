@@ -5,7 +5,7 @@ export function findUserInfo(quotedMessage, storeContext) {
   if (!nickname || !avatarUrl) {
     const uid = String(quotedMessage.userId || '');
     if (uid) {
-      const { sessionStore, groupStore, friendStore, publicStore, baseStore } = storeContext;
+      const { sessionStore, groupStore, friendStore, unifiedStore, baseStore } = storeContext;
       const currentUserId = baseStore?.currentUser?.id;
       if (currentUserId !== undefined && String(currentUserId) === uid) {
         if (!nickname) nickname = baseStore.currentUser.nickname || '';
@@ -29,10 +29,10 @@ export function findUserInfo(quotedMessage, storeContext) {
           }
         }
         if (!nickname || !avatarUrl) {
-          const publicUser = publicStore.getPublicUser?.(uid);
-          if (publicUser) {
-            if (!nickname) nickname = publicUser.nickname || '';
-            if (!avatarUrl) avatarUrl = publicUser.avatarUrl || publicUser.avatar_url || '';
+          const unifiedUser = unifiedStore.getUnifiedUser?.(uid);
+          if (unifiedUser) {
+            if (!nickname) nickname = unifiedUser.nickname || '';
+            if (!avatarUrl) avatarUrl = unifiedUser.avatarUrl || unifiedUser.avatar_url || '';
           }
         }
       }

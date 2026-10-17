@@ -381,7 +381,7 @@ body.dark-mode .chat-interface {
 /* === 聊天头部 === */
 body.dark-mode .private-header,
 body.dark-mode .private-chat-header,
-body.dark-mode .public-chat-header,
+body.dark-mode .unified-chat-header,
 body.dark-mode .public-header,
 body.dark-mode .group-header {
     background-color: #161b22;
@@ -1811,9 +1811,24 @@ body.dark-mode .group-item.active {
     background: #1f3a5f !important;
 }
 
+/* 消息 / 群组 / 私信二级侧边栏：当前打开的会话深色高亮（浅蓝，与好友项一致） */
+body.dark-mode .user-list .chat-session-item.active,
+body.dark-mode #groupList li.active,
+body.dark-mode .user-list li.active {
+    background: #1f3a5f !important;
+}
+
 body.dark-mode .friend-item .friend-name,
 body.dark-mode .group-item .group-name {
     color: #c9d1d9 !important;
+}
+
+/* 消息二级侧边栏：会话项名称 / 最后消息深色文字（与好友/群组项一致） */
+body.dark-mode .user-list .chat-session-name {
+    color: #c9d1d9 !important;
+}
+body.dark-mode .user-list .chat-session-last-msg {
+    color: #8b949e !important;
 }
 
 body.dark-mode .friend-item .friend-last-message,
@@ -3422,7 +3437,7 @@ noscript {
 }
 
 /* 公共聊天和群组聊天按钮的未读计数位置 */
-.menu-item[data-section="public-chat"] .unread-count,
+.menu-item[data-section="unified-chat"] .unread-count,
 .menu-item[data-section="group-chat"] .unread-count {
     top: 8px;
     right: 20px;
@@ -6026,6 +6041,135 @@ body.dark-mode .send-group-card-container p {
 #userProfileModal .text-btn:hover { opacity: 0.8; }
 #userProfileModal .text-btn.danger { color: #ff4757; }
 #userProfileModal .text-btn:not(.danger) { color: #333; }
+
+/* === 抽屉弹窗深色模式：群组信息 / 好友资料 / 群成员列表 === */
+body.dark-mode #groupInfoModal .modal-content,
+body.dark-mode #userProfileModal .modal-content,
+body.dark-mode #groupMembersModal .modal-content {
+    background: #161b22 !important;
+    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* 卡片容器统一深色底 */
+body.dark-mode #groupInfoModal .member-area,
+body.dark-mode #groupInfoModal .switch-setting,
+body.dark-mode #groupInfoModal .group-info-section,
+body.dark-mode #groupInfoModal .notice-section,
+body.dark-mode #groupInfoModal .btn-group,
+body.dark-mode #userProfileModal .friend-card,
+body.dark-mode #userProfileModal .personal-setting,
+body.dark-mode #userProfileModal .friend-info-section-card,
+body.dark-mode #userProfileModal .btn-group,
+body.dark-mode #groupMembersModal .group-members-header,
+body.dark-mode #groupMembersModal .group-members-list {
+    background: #1c2129 !important;
+}
+
+/* 主要文字 */
+body.dark-mode #groupInfoModal .group-drawer-name,
+body.dark-mode #groupInfoModal .member-title,
+body.dark-mode #groupInfoModal .switch-item .label,
+body.dark-mode #groupInfoModal .info-label,
+body.dark-mode #groupInfoModal .info-display,
+body.dark-mode #groupInfoModal .notice-header,
+body.dark-mode #groupInfoModal .text-btn:not(.danger),
+body.dark-mode #userProfileModal .friend-name,
+body.dark-mode #userProfileModal .switch-item .label,
+body.dark-mode #userProfileModal .info-label,
+body.dark-mode #userProfileModal .info-display,
+body.dark-mode #userProfileModal .text-btn:not(.danger),
+body.dark-mode #groupMembersModal .name,
+body.dark-mode #groupMembersModal .switch-item .label {
+    color: #c9d1d9 !important;
+}
+
+/* 次要文字 */
+body.dark-mode #groupInfoModal .group-drawer-id,
+body.dark-mode #groupInfoModal .group-drawer-header > .close,
+body.dark-mode #groupInfoModal .refresh-btn,
+body.dark-mode #groupInfoModal .name,
+body.dark-mode #groupInfoModal .tool-btn,
+body.dark-mode #groupInfoModal .tool-text,
+body.dark-mode #groupInfoModal .info-display .info-text.info-placeholder,
+body.dark-mode #groupInfoModal .info-display .icon-edit-outline,
+body.dark-mode #groupInfoModal .notice-header .icon-edit-outline,
+body.dark-mode #groupInfoModal .notice-display,
+body.dark-mode #userProfileModal .modal-content > .close,
+body.dark-mode #userProfileModal .friend-id-row,
+body.dark-mode #userProfileModal .friend-last-online-row,
+body.dark-mode #userProfileModal .copy-btn,
+body.dark-mode #userProfileModal .info-display .info-text.info-placeholder,
+body.dark-mode #userProfileModal .info-display .icon-edit-outline {
+    color: #8b949e !important;
+}
+
+/* 分隔线与边框 */
+body.dark-mode #groupInfoModal .switch-item + .switch-item,
+body.dark-mode #groupInfoModal .info-item + .info-item,
+body.dark-mode #groupInfoModal .text-btn + .text-btn,
+body.dark-mode #userProfileModal .switch-item + .switch-item,
+body.dark-mode #userProfileModal .info-item + .info-item,
+body.dark-mode #userProfileModal .text-btn + .text-btn {
+    border-top-color: #30363d !important;
+}
+
+/* 悬停反馈 */
+body.dark-mode #groupInfoModal .group-member-card:hover,
+body.dark-mode #groupInfoModal .member-tools:hover,
+body.dark-mode #groupMembersModal .group-member-card:hover {
+    background: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* 输入框 / 文本域 */
+body.dark-mode #groupInfoModal .drawer-input,
+body.dark-mode #groupInfoModal .drawer-textarea,
+body.dark-mode #userProfileModal .remark-input {
+    background: #0d1117 !important;
+    border-color: #30363d !important;
+    color: #c9d1d9 !important;
+}
+
+/* 工具按钮圆形底 */
+body.dark-mode #groupInfoModal .tool-btn {
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* 查看全部成员按钮 */
+body.dark-mode #groupInfoModal .more-member-btn {
+    background: rgba(99, 102, 241, 0.18) !important;
+    border-color: rgba(99, 102, 241, 0.4) !important;
+    color: #818cf8 !important;
+}
+body.dark-mode #groupInfoModal .more-member-btn:hover {
+    background: rgba(99, 102, 241, 0.3) !important;
+}
+
+/* 头像占位底色与在线点边框 */
+body.dark-mode #userProfileModal .friend-avatar .avatar-image {
+    background: #21262d !important;
+}
+body.dark-mode #userProfileModal .friend-avatar .online,
+body.dark-mode #groupInfoModal .head-image .online {
+    border-color: #1c2129 !important;
+}
+
+/* 抽屉弹窗内 switch 开关滑块深色（群组/好友信息弹窗的免打扰等开关） */
+body.dark-mode #groupInfoModal .switch .slider,
+body.dark-mode #userProfileModal .switch .slider {
+    background-color: #30363d !important;
+}
+body.dark-mode #groupInfoModal .switch .slider:before,
+body.dark-mode #userProfileModal .switch .slider:before {
+    background-color: #c9d1d9 !important;
+}
+body.dark-mode #groupInfoModal .switch input:checked + .slider,
+body.dark-mode #userProfileModal .switch input:checked + .slider {
+    background-color: #e74c3c !important;
+}
+body.dark-mode #groupInfoModal .switch input:checked + .slider:before,
+body.dark-mode #userProfileModal .switch input:checked + .slider:before {
+    background-color: #fff !important;
+}
 
 /* === 群成员完整列表（查看全部成员，参考盒子IM） === */
 #groupMembersModal.modal {

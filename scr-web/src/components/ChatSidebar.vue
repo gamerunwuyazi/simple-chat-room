@@ -4,11 +4,17 @@ import { useRouter, useRoute } from 'vue-router';
 
 import { useBaseStore } from '@/stores/baseStore';
 import { useUnreadStore } from '@/stores/unreadStore';
+import { useSessionStore } from '@/stores/sessionStore';
+import { useDraftStore } from '@/stores/draftStore';
+import { useInputStore } from '@/stores/inputStore';
 import { logout } from '@/utils/chat/ui';
 import modal from '@/utils/modal';
 
 const baseStore = useBaseStore();
 const unreadStore = useUnreadStore();
+const sessionStore = useSessionStore();
+const draftStore = useDraftStore();
+const inputStore = useInputStore();
 const SERVER_URL = baseStore.SERVER_URL || import.meta.env.VITE_SERVER_URL || '';
 
 const router = useRouter();
@@ -33,7 +39,7 @@ onUnmounted(() => {
 const activeMenuItem = computed(() => {
   const path = route.path;
   if (path === '/chat' || path === '/') {
-    return 'public-chat';
+    return 'unified-chat';
   } else if (path.startsWith('/chat/group')) {
     return 'group-chat';
   } else if (path.startsWith('/chat/private')) {
@@ -41,11 +47,11 @@ const activeMenuItem = computed(() => {
   } else if (path.startsWith('/chat/settings')) {
     return 'user-settings';
   } else {
-    return 'public-chat';
+    return 'unified-chat';
   }
 });
 
-const publicUnreadCount = computed(() => {
+const unifiedUnreadCount = computed(() => {
   return unreadStore.unreadMessages?.global || 0;
 });
 
@@ -94,7 +100,7 @@ const friendRequestUnreadCount = computed(() => {
 
 // 主聊天图标角标 = 主聊天室 + 群组 + 私信所有未读总和
 const totalUnreadCount = computed(() => {
-  return publicUnreadCount.value + groupUnreadCount.value + privateUnreadCount.value;
+  return unifiedUnreadCount.value + groupUnreadCount.value + privateUnreadCount.value;
 });
 
 const currentUser = computed(() => {
@@ -150,7 +156,7 @@ async function handleMenuClick(section) {
   }
 
   let path = '';
-  if (section === 'public-chat') {
+  if (section === 'unified-chat') {
     // 不重置面板类型：恢复上次打开的面板（chatPanelType 持久保存在 sessionStore 中）
     path = '/chat';
   } else if (section === 'group-chat') {
@@ -162,7 +168,35 @@ async function handleMenuClick(section) {
   }
   
   if (path) {
+    // 切换页面离开前保存当前聊天面板草稿（点击时输入框 DOM 仍存在，最可靠）
+    saveCurrentPanelDraft();
     router.push(path);
+  }
+}
+
+// 保存当前聊天面板（主聊天室/群聊/私聊）的草稿：内容取自输入框 DOM（纯文本，供列表 [草稿] 显示）
+function saveCurrentPanelDraft() {
+  const panelType = sessionStore.chatPanelType;
+  if (panelType === 'main') {
+    const mainInput = document.getElementById('messageInput');
+    if (mainInput) {
+      inputStore.mainMessageInput = mainInput.innerHTML;
+      draftStore.saveDraft('main', null, mainInput.textContent || '');
+    }
+  } else if (panelType === 'private') {
+    const privateId = sessionStore.currentPrivateChatUserId;
+    const input = document.getElementById('privateMessageInput');
+    if (privateId && input) {
+      draftStore.saveDraft('private', privateId, input.textContent || input.innerHTML || '');
+      draftStore.setLastMessageToDraft('private', privateId);
+    }
+  } else if (panelType === 'group') {
+    const groupId = sessionStore.currentGroupId;
+    const input = document.getElementById('groupMessageInput');
+    if (groupId && input) {
+      draftStore.saveDraft('group', groupId, input.textContent || input.innerHTML || '');
+      draftStore.setLastMessageToDraft('group', groupId);
+    }
   }
 }
 </script>
@@ -183,7 +217,7 @@ async function handleMenuClick(section) {
     
     <div class="menu-section">
         <ul class="menu-list">
-            <li :class="['menu-item', { active: activeMenuItem === 'public-chat' }]" data-section="public-chat" @click="handleMenuClick('public-chat')">
+            <li :class="['menu-item', { active: activeMenuItem === 'unified-chat' }]" data-section="unified-chat" @click="handleMenuClick('unified-chat')">
                 <div class="chat-avatar"><i class="fas fa-comments"></i></div>
                 <span class="menu-label">消息</span>
                 <div v-if="totalUnreadCount > 0" class="unread-count">{{ totalUnreadCount }}</div>

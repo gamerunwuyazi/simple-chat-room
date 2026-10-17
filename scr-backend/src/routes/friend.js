@@ -12,6 +12,7 @@ import {
   handleBlockUser,
   handleUnblockUser,
   handleCheckBlockStatus,
+  handleGetBlockList,
   handleSearchUsers,
   handleSetFriendRemark,
   handleSetFriendDisturb
@@ -64,6 +65,10 @@ export function setupRoutes(app, io) {
 
   app.post('/api/user/unblock-user', (req, res) => {
     handleUnblockUser(req, res, io);
+  });
+
+  app.get('/api/user/block-list', (req, res) => {
+    handleGetBlockList(req, res, io);
   });
 
   app.get('/api/user/check-block-status/:targetUserId', (req, res) => {

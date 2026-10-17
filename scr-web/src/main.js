@@ -43,10 +43,10 @@ const router = createRouter({
             children: [
                 {
                     path: '',
-                    name: 'public',
+                    name: 'unified',
                     components: {
-                        default: () => import('./views/PublicChat.vue'),
-                        sidebar: () => import('./components/Sidebar/PublicSidebar.vue')
+                        default: () => import('./views/UnifiedChat.vue'),
+                        sidebar: () => import('./components/Sidebar/UnifiedSidebar.vue')
                     }
                 },
                 {

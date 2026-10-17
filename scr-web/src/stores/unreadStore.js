@@ -10,7 +10,7 @@ export const useUnreadStore = defineStore('unread', () => {
     private: {}
   });
 
-  const hasPublicAtMe = ref(false);
+  const hasUnifiedAtMe = ref(false);
 
   // ============================================
   // 清除未读事件批量队列
@@ -87,7 +87,7 @@ export const useUnreadStore = defineStore('unread', () => {
     loadUnreadCountsFromLocalStorage();
     let hasUnreadToClear = unreadMessages.value.global > 0;
     unreadMessages.value.global = 0;
-    hasPublicAtMe.value = false;
+    hasUnifiedAtMe.value = false;
     saveUnreadCountsToLocalStorage();
     if (hasUnreadToClear) enqueueUnreadClear('global');
   }
@@ -183,23 +183,23 @@ export const useUnreadStore = defineStore('unread', () => {
     unreadMessages.value.global = 0;
     unreadMessages.value.groups = {};
     unreadMessages.value.private = {};
-    hasPublicAtMe.value = false;
+    hasUnifiedAtMe.value = false;
     saveUnreadCountsToLocalStorage();
     if (typeof updateUnreadCountsDisplay === 'function') updateUnreadCountsDisplay();
     return true;
   }
 
-  function setPublicHasAtMe() {
-    hasPublicAtMe.value = true;
+  function setUnifiedHasAtMe() {
+    hasUnifiedAtMe.value = true;
   }
 
-  function clearPublicHasAtMe() {
-    hasPublicAtMe.value = false;
+  function clearUnifiedHasAtMe() {
+    hasUnifiedAtMe.value = false;
   }
 
   return {
     unreadMessages,
-    hasPublicAtMe,
+    hasUnifiedAtMe,
     pendingUnreadClear,
     clearGroupUnread,
     clearPrivateUnread,
@@ -215,7 +215,7 @@ export const useUnreadStore = defineStore('unread', () => {
     saveUnreadCountsToLocalStorage,
     saveUnreadCountsToLocalStorageDirect,
     clearAllUnreadCounts,
-    setPublicHasAtMe,
-    clearPublicHasAtMe
+    setUnifiedHasAtMe,
+    clearUnifiedHasAtMe
   };
 });

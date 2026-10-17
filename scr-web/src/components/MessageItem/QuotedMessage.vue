@@ -80,7 +80,7 @@ import { useBaseStore } from '@/stores/baseStore';
 import { useFriendStore } from '@/stores/friendStore';
 import { useGroupStore } from '@/stores/groupStore';
 import { useModalStore } from '@/stores/modalStore';
-import { usePublicStore } from '@/stores/publicStore';
+import { useUnifiedStore } from '@/stores/unifiedStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useStorageStore } from '@/stores/storageStore';
 import { showGroupCardPopup } from '@/utils/chat';
@@ -96,7 +96,7 @@ const props = defineProps({
 const baseStore = useBaseStore();
 const groupStore = useGroupStore();
 const friendStore = useFriendStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const modalStore = useModalStore();
 const sessionStore = useSessionStore();
 const storageStore = useStorageStore();
@@ -172,7 +172,7 @@ onUnmounted(() => {
 function getQuotedUserInfo() {
   const msgId = props.quotedMessageData?.id;
   if (msgId && msgId !== -1 && String(msgId) !== '-1') {
-    const pubMsg = publicStore.publicMessages?.find(m => String(m.id) === String(msgId));
+    const pubMsg = unifiedStore.unifiedMessages?.find(m => String(m.id) === String(msgId));
     if (pubMsg && pubMsg.nickname) return pubMsg;
     
     const gid = sessionStore.currentGroupId;
@@ -187,7 +187,7 @@ function getQuotedUserInfo() {
       if (pMsg && pMsg.nickname) return pMsg;
     }
     
-    const fullPubMsg = storageStore.fullPublicMessages?.find(m => String(m.id) === String(msgId));
+    const fullPubMsg = storageStore.fullUnifiedMessages?.find(m => String(m.id) === String(msgId));
     if (fullPubMsg && fullPubMsg.nickname) return fullPubMsg;
     
     const fullGroups = storageStore.fullGroupMessages;
@@ -206,7 +206,7 @@ function getQuotedUserInfo() {
       }
     }
   }
-  return findUserInfo(props.quotedMessageData, { sessionStore, groupStore, friendStore, publicStore, baseStore });
+  return findUserInfo(props.quotedMessageData, { sessionStore, groupStore, friendStore, unifiedStore, baseStore });
 }
 
 const resolvedUserInfo = computed(() => getQuotedUserInfo());
@@ -424,7 +424,7 @@ async function handleQuotedMessageClick() {
       
       if (foundMessage && foundStorageKey) {
         if (foundStorageKey.includes('-public')) {
-          const storeMessages = publicStore.publicMessages;
+          const storeMessages = unifiedStore.unifiedMessages;
           if (storeMessages.length > 0) {
             const storeMinId = Math.min(...storeMessages.map(m => m.id));
             const startId = Math.max(1, foundMessage.id - 20);
@@ -437,7 +437,7 @@ async function handleQuotedMessageClick() {
                 .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101)
                 .sort((a, b) => a.id - b.id);
               
-              publicStore.prependPublicMessages(messagesToAdd);
+              unifiedStore.prependUnifiedMessages(messagesToAdd);
             }
           }
         } else if (foundStorageKey.includes('-group-')) {

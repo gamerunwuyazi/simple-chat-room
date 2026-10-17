@@ -48,16 +48,22 @@ export class RedisUnavailableError extends Error {
 }
 
 function withRedisTimeout(operation) {
-  return Promise.race([
-    operation(redisClient),
-    new Promise((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error('Redis 命令执行超时'));
-      }, REDIS_COMMAND_TIMEOUT_MS);
-      // 让定时器在进程退出前不阻塞
-      if (timer.unref) timer.unref();
-    })
-  ]);
+  // 注意：必须用 new Promise 手动 clearTimeout，而不是 Promise.race + unref。
+  // Promise.race 在 operation 先 resolve 后仍会保留那个 10s 定时器直到其触发，
+  // 高并发下会同时滞留「命令速率 × 10s」个 Timer 对象与闭包（GC 压力/内存高水位）。
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('Redis 命令执行超时'));
+    }, REDIS_COMMAND_TIMEOUT_MS);
+    // 让定时器在进程退出前不阻塞
+    if (timer.unref) timer.unref();
+    Promise.resolve()
+      .then(() => operation(redisClient))
+      .then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        (err) => { clearTimeout(timer); reject(err); }
+      );
+  });
 }
 
 // options.strict: true 时，Redis 不可用/超时不再返回 fallbackValue，

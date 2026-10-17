@@ -3,7 +3,7 @@ import { ref } from 'vue';
 import { useBaseStore } from './baseStore';
 import { useGroupStore } from './groupStore';
 import { useFriendStore } from './friendStore';
-import { usePublicStore } from './publicStore';
+import { useUnifiedStore } from './unifiedStore';
 import { useInputStore } from './inputStore';
 
 export const useSessionStore = defineStore('session', () => {
@@ -21,18 +21,20 @@ export const useSessionStore = defineStore('session', () => {
   const chatPanelType = ref('main');
   // 私信面板内是否显示"新的朋友"好友申请列表（点击私信侧边栏置顶的"新的朋友"置位）
   const showFriendRequests = ref(false);
+  // 私信面板内是否显示"黑名单"列表（点击私信侧边栏置顶的"黑名单"置位）
+  const showBlackList = ref(false);
 
   function setCurrentGroupId(id) {
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const baseStore = useBaseStore();
 
     currentGroupId.value = id;
     const inputStore = useInputStore();
     if (inputStore) inputStore.clearQuotedMessage();
     if (groupStore) groupStore.clearOtherGroupMessages(id);
-    if (publicStore) publicStore.clearPublicMessagesExceptRecent();
+    if (unifiedStore) unifiedStore.clearUnifiedMessagesExceptRecent();
     if (friendStore) friendStore.clearOtherPrivateMessages(null);
     if (id && groupStore) groupStore.clearGroupHasAtMe(id);
   }
@@ -40,38 +42,38 @@ export const useSessionStore = defineStore('session', () => {
   function setCurrentPrivateChatUserId(id) {
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const inputStore = useInputStore();
 
     currentPrivateChatUserId.value = id;
     if (inputStore) inputStore.clearQuotedMessage();
     if (friendStore) friendStore.clearOtherPrivateMessages(id);
-    if (publicStore) publicStore.clearPublicMessagesExceptRecent();
+    if (unifiedStore) unifiedStore.clearUnifiedMessagesExceptRecent();
     if (groupStore) groupStore.clearOtherGroupMessages(null);
   }
 
   function setCurrentActiveChat(type) {
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const inputStore = useInputStore();
 
     currentActiveChat.value = type;
     if (inputStore) inputStore.clearQuotedMessage();
     if (type === 'main') {
-      if (publicStore) publicStore.clearPublicMessagesExceptRecent();
+      if (unifiedStore) unifiedStore.clearUnifiedMessagesExceptRecent();
       if (groupStore) groupStore.clearOtherGroupMessages(null);
       if (friendStore) friendStore.clearOtherPrivateMessages(null);
     } else if (type.startsWith('group_')) {
       const groupId = type.replace('group_', '');
       if (groupStore) groupStore.clearOtherGroupMessages(groupId);
-      if (publicStore) publicStore.clearPublicMessagesExceptRecent();
+      if (unifiedStore) unifiedStore.clearUnifiedMessagesExceptRecent();
       if (friendStore) friendStore.clearOtherPrivateMessages(null);
       if (groupId && groupStore) groupStore.clearGroupHasAtMe(groupId);
     } else if (type.startsWith('private_')) {
       const userId = type.replace('private_', '');
       if (friendStore) friendStore.clearOtherPrivateMessages(userId);
-      if (publicStore) publicStore.clearPublicMessagesExceptRecent();
+      if (unifiedStore) unifiedStore.clearUnifiedMessagesExceptRecent();
       if (groupStore) groupStore.clearOtherGroupMessages(null);
     }
   }
@@ -94,6 +96,7 @@ export const useSessionStore = defineStore('session', () => {
     selectedGroupIdForCard,
     chatPanelType,
     showFriendRequests,
+    showBlackList,
     setCurrentGroupId,
     setCurrentPrivateChatUserId,
     setCurrentActiveChat,

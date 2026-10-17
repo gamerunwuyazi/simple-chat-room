@@ -9,7 +9,7 @@ import { useFriendStore } from '@/stores/friendStore';
 import { useGroupStore } from '@/stores/groupStore';
 import { openUserAvatarPopup } from '@/stores/index.js';
 import { useInputStore } from '@/stores/inputStore';
-import { usePublicStore } from '@/stores/publicStore';
+import { useUnifiedStore } from '@/stores/unifiedStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useStorageStore } from '@/stores/storageStore';
 import { useUnreadStore } from '@/stores/unreadStore';
@@ -22,7 +22,7 @@ const baseStore = useBaseStore();
 const userStore = useUserStore();
 const friendStore = useFriendStore();
 const groupStore = useGroupStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const unreadStore = useUnreadStore();
 const draftStore = useDraftStore();
 const sessionStore = useSessionStore();
@@ -199,12 +199,30 @@ function getGroupLastMessageText(group) {
   return groupNickname ? `${groupNickname}: ${formatted}` : formatted;
 }
 
-// 主聊天室最后一条消息（过滤 101 撤回 / 102 用户信息更新 / 103 已读回执）
+// 主聊天室最后一条消息：从后往前取最后一条应显示的消息，
+// 过滤 102(用户信息更新)/103(已读回执) 非渲染消息；101 撤回消息保留并显示"X撤回了一条消息"；
+// 普通消息用 formatMessageContent 显示占位符（图片/文件/引用等），与群聊/私聊一致
 const mainChatLastMessage = computed(() => {
-  const messages = publicStore.publicMessages || [];
-  const validMessages = messages.filter(m => m.messageType !== 101 && m.messageType !== 102 && m.messageType !== 103);
-  if (validMessages.length === 0) return '';
-  return storageStore.formatMessageContent(validMessages[validMessages.length - 1]);
+  const messages = unifiedStore.unifiedMessages || [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    // 102 用户信息更新 / 103 已读回执：非渲染消息，跳过
+    if (msg.messageType === 102 || msg.messageType === 103) continue;
+    // 101 撤回消息（或 isRecalled 标记）：显示撤回提示
+    if (msg.messageType === 101 || msg.isRecalled) {
+      const recallNickname = tryGetRecallNickname(msg.content);
+      return recallNickname ? `${recallNickname}撤回了一条消息` : '撤回了一条消息';
+    }
+    // 普通消息：占位符由 formatMessageContent 处理
+    return storageStore.formatMessageContent(msg);
+  }
+  return '';
+});
+
+// 主聊天室草稿（与群组/私信一致：仅在切换离开时保存到 draftStore，不实时跟随输入）
+const mainChatDraft = computed(() => {
+  const draft = draftStore.drafts?.main;
+  return draft && String(draft).trim() ? String(draft).trim() : '';
 });
 
 const mainUnreadCount = computed(() => {
@@ -299,11 +317,15 @@ function clearSearch() {
 }
 
 function isSessionActive(session) {
+  // 必须同时匹配会话类型和 id：私聊与群聊 id 可能相同，
+  // 只比 id 会导致另一种类型的同 id 会话也被标记为打开状态
   if (sessionStore.chatPanelType === 'private') {
-    return String(sessionStore.currentPrivateChatUserId) === String(session.id);
+    return session.kind === 'private' &&
+      String(sessionStore.currentPrivateChatUserId) === String(session.id);
   }
   if (sessionStore.chatPanelType === 'group') {
-    return String(sessionStore.currentGroupId) === String(session.id);
+    return session.kind === 'group' &&
+      String(sessionStore.currentGroupId) === String(session.id);
   }
   return false;
 }
@@ -317,6 +339,8 @@ function saveCurrentPanelDraft() {
     const mainInput = document.getElementById('messageInput');
     if (mainInput) {
       inputStore.mainMessageInput = mainInput.innerHTML;
+      // 切换离开主聊天室时保存草稿到 draftStore（列表项显示用，纯文本）
+      draftStore.saveDraft('main', null, mainInput.textContent || '');
     }
   } else if (panelType === 'private') {
     const privateId = sessionStore.currentPrivateChatUserId;
@@ -405,7 +429,8 @@ async function handleSessionClick(session) {
                     </span>
                     <div class="chat-session-info">
                         <span class="chat-session-name">聊天室</span>
-                        <span class="chat-session-last-msg">{{ mainChatLastMessage || '暂无消息' }}</span>
+                        <span v-if="mainChatDraft" class="chat-session-last-msg draft-text">[草稿] {{ mainChatDraft }}</span>
+                        <span v-else class="chat-session-last-msg">{{ mainChatLastMessage || '暂无消息' }}</span>
                     </div>
                     <div v-if="mainUnreadCount > 0" class="unread-count chat-unread-badge">{{ mainUnreadCount > 99 ? '99+' : mainUnreadCount }}</div>
                 </li>
@@ -708,91 +733,5 @@ async function handleSessionClick(session) {
     font-weight: 500;
 }
 
-:global(body.dark-mode) .user-list .chat-session-item {
-    background-color: #21262d;
-    color: #c9d1d9;
-}
-
-:global(body.dark-mode) .user-list .chat-session-item:hover {
-    background-color: #21262d;
-    color: #c9d1d9;
-}
-
-:global(body.dark-mode) .user-list .chat-session-item.active {
-    background-color: #2c3e50;
-}
-
-:global(body.dark-mode) .chat-session-name {
-    color: #c9d1d9;
-}
-
-:global(body.dark-mode) .chat-session-last-msg {
-    color: #8b949e;
-}
-
-:global(body.dark-mode) .user-avatar-wrapper .online-indicator {
-    border-color: #161b22;
-}
-
-:global(body.dark-mode) .chat-session-item.deleted-item {
-    background-color: #161b22 !important;
-}
-
-:global(body.dark-mode) .chat-session-item.deleted-item:hover {
-    background-color: #21262d !important;
-}
-
-:global(body.dark-mode) .deleted-icon {
-    background: #161b22;
-    color: #f85149;
-}
-
-:global(body.dark-mode) .chat-unread-badge {
-    background: #da3633;
-}
-
-:global(body.dark-mode) .user-list .chat-list-divider {
-    border-top-color: #30363d;
-}
-
-:global(body.dark-mode) .user-list .chat-list-empty {
-    color: #8b949e;
-}
-
-:global(body.dark-mode) .online-users-btn {
-    background: #0f2b1a;
-    color: #3fb950;
-}
-
-:global(body.dark-mode) .online-users-btn:hover {
-    background: #14432a;
-}
-
-:global(body.dark-mode) .online-users-btn.active {
-    background: #238636;
-    color: #ffffff;
-}
-
-:global(body.dark-mode) .online-users-bubble {
-    background: #161b22;
-    border-color: #30363d;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-}
-
-:global(body.dark-mode) .online-users-bubble-header {
-    color: #c9d1d9;
-    border-bottom-color: #30363d;
-}
-
-:global(body.dark-mode) .online-user-item:hover {
-    background: #21262d;
-}
-
-:global(body.dark-mode) .online-user-name {
-    color: #c9d1d9;
-}
-
-:global(body.dark-mode) .online-users-empty {
-    color: #8b949e;
-}
+/* 深色模式规则统一收归 index.css 全局（避免 scoped :global() 编译异常导致选择器丢失） */
 </style>

@@ -2,7 +2,7 @@ import { useBaseStore } from './baseStore.js';
 import { useUserStore } from './userStore.js';
 import { useFriendStore } from './friendStore.js';
 import { useGroupStore } from './groupStore.js';
-import { usePublicStore } from './publicStore.js';
+import { useUnifiedStore } from './unifiedStore.js';
 import { useModalStore } from './modalStore.js';
 import { useSessionStore } from './sessionStore.js';
 import { useStorageStore } from './storageStore.js';
@@ -55,7 +55,7 @@ export {
   useUserStore,
   useFriendStore,
   useGroupStore,
-  usePublicStore,
+  useUnifiedStore,
   useModalStore,
   useSessionStore,
   useStorageStore,

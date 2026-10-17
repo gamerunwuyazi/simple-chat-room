@@ -4,7 +4,7 @@ import localForage from 'localforage';
 import { useUserStore } from './userStore';
 import { useFriendStore } from './friendStore';
 import { useGroupStore } from './groupStore';
-import { usePublicStore } from './publicStore';
+import { useUnifiedStore } from './unifiedStore';
 import { useSessionStore } from './sessionStore';
 import { useUnreadStore } from './unreadStore';
 import { useBaseStore } from './baseStore';
@@ -40,12 +40,12 @@ function isUserFocusedOnChat(chatType, chatId) {
   return false;
 }
 
-let cachePublicMessages = [];
+let cacheUnifiedMessages = [];
 let cacheGroupMessages = {};
 let cachePrivateMessages = {};
 
 export const useStorageStore = defineStore('storage', () => {
-  const fullPublicMessages = ref(null);
+  const fullUnifiedMessages = ref(null);
   const fullGroupMessages = ref({});
   const fullPrivateMessages = ref({});
   const sessionLastMessageTimes = ref({ groups: {}, friends: {} });
@@ -62,18 +62,18 @@ export const useStorageStore = defineStore('storage', () => {
     const baseStore = useBaseStore();
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
 
     if (baseStore.loading) return;
 
     const prefix = getStorageKeyPrefix();
 
     try {
-      if (publicStore && !publicStore.publicStored) {
-        const messagesToSave = fullPublicMessages.value !== null ? fullPublicMessages.value : [];
+      if (unifiedStore && !unifiedStore.unifiedStored) {
+        const messagesToSave = fullUnifiedMessages.value !== null ? fullUnifiedMessages.value : [];
         const messages = messagesToSave.map(msg => toRaw(msg));
         await localForage.setItem(`${prefix}-public`, { messages });
-        publicStore.publicStored = true;
+        unifiedStore.unifiedStored = true;
       }
 
       for (const [groupId, messages] of Object.entries(fullGroupMessages.value)) {
@@ -186,7 +186,7 @@ export const useStorageStore = defineStore('storage', () => {
   }
 
   async function loadMessages(loadToStore) {
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
 
@@ -215,10 +215,10 @@ export const useStorageStore = defineStore('storage', () => {
 
       if (key.includes('-public')) {
         const checkedMessages = checkAndFixQuotedMessages(messages, 'public');
-        fullPublicMessages.value = [...checkedMessages];
+        fullUnifiedMessages.value = [...checkedMessages];
         if (loadToStore) {
           const filteredMessages = checkedMessages.filter(m => m.messageType !== 101 && m.messageType !== 102);
-          publicStore.publicMessages = filteredMessages.slice(Math.max(0, filteredMessages.length - 20), filteredMessages.length);
+          unifiedStore.unifiedMessages = filteredMessages.slice(Math.max(0, filteredMessages.length - 20), filteredMessages.length);
         }
       } else if (key.includes('-group-')) {
         const groupId = key.split('-group-')[1];
@@ -239,26 +239,26 @@ export const useStorageStore = defineStore('storage', () => {
       }
     }
 
-    publicStore.publicStored = true;
+    unifiedStore.unifiedStored = true;
     Object.keys(groupStore.groupMessages).forEach(id => { groupStore.groupStored[id] = true; });
     Object.keys(friendStore.privateMessages).forEach(id => { friendStore.privateStored[id] = true; });
   }
 
   function clearMessages() {
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
 
-    cachePublicMessages.length = 0;
+    cacheUnifiedMessages.length = 0;
     Object.keys(cacheGroupMessages).forEach(key => delete cacheGroupMessages[key]);
     Object.keys(cachePrivateMessages).forEach(key => delete cachePrivateMessages[key]);
-    publicStore.publicMessages = [];
+    unifiedStore.unifiedMessages = [];
     groupStore.groupMessages = {};
     friendStore.privateMessages = {};
-    publicStore.publicStored = false;
+    unifiedStore.unifiedStored = false;
     groupStore.groupStored = {};
     friendStore.privateStored = {};
-    fullPublicMessages.value = null;
+    fullUnifiedMessages.value = null;
     fullGroupMessages.value = {};
     fullPrivateMessages.value = {};
     sessionLastMessageTimes.value = { groups: {}, friends: {} };
@@ -290,13 +290,13 @@ export const useStorageStore = defineStore('storage', () => {
   }
 
   function refreshMessages() {
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
 
-    if (cachePublicMessages.length > 0) {
-      publicStore.publicMessages = cachePublicMessages;
-      cachePublicMessages = [];
+    if (cacheUnifiedMessages.length > 0) {
+      unifiedStore.unifiedMessages = cacheUnifiedMessages;
+      cacheUnifiedMessages = [];
     }
 
     Object.keys(cacheGroupMessages).forEach(groupId => {
@@ -309,7 +309,7 @@ export const useStorageStore = defineStore('storage', () => {
     });
     cachePrivateMessages = {};
 
-    publicStore.publicStored = false;
+    unifiedStore.unifiedStored = false;
     Object.keys(groupStore.groupMessages).forEach(id => { groupStore.groupStored[id] = false; });
     Object.keys(friendStore.privateMessages).forEach(id => { friendStore.privateStored[id] = false; });
     saveToStorage();
@@ -320,7 +320,7 @@ export const useStorageStore = defineStore('storage', () => {
     const userStore = useUserStore();
     const friendStore = useFriendStore();
     const groupStore = useGroupStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
 
     const processedMessage = {
       id: Number(message.id),
@@ -444,42 +444,42 @@ export const useStorageStore = defineStore('storage', () => {
         const recallJson = recallerId ? JSON.stringify({ [recallerId]: recallNickname }) : '';
 
         if (messageIdToDelete) {
-          if (fullPublicMessages.value !== null && fullPublicMessages.value !== undefined) {
-            const updates = fixQuotedMessagesForWithdrawn(messageIdToDelete, fullPublicMessages.value);
+          if (fullUnifiedMessages.value !== null && fullUnifiedMessages.value !== undefined) {
+            const updates = fixQuotedMessagesForWithdrawn(messageIdToDelete, fullUnifiedMessages.value);
             updates.forEach(update => {
-              const index = publicStore.publicMessages?.findIndex(m => String(m.id) === String(update.messageId));
+              const index = unifiedStore.unifiedMessages?.findIndex(m => String(m.id) === String(update.messageId));
               if (index !== -1) {
-                publicStore.publicMessages[index] = toRaw({
-                  ...toRaw(publicStore.publicMessages[index]),
+                unifiedStore.unifiedMessages[index] = toRaw({
+                  ...toRaw(unifiedStore.unifiedMessages[index]),
                   content: update.newContent
                 });
               }
-              const fullIndex = fullPublicMessages.value.findIndex(m => String(m.id) === String(update.messageId));
+              const fullIndex = fullUnifiedMessages.value.findIndex(m => String(m.id) === String(update.messageId));
               if (fullIndex !== -1) {
-                fullPublicMessages.value[fullIndex] = toRaw({
-                  ...toRaw(fullPublicMessages.value[fullIndex]),
+                fullUnifiedMessages.value[fullIndex] = toRaw({
+                  ...toRaw(fullUnifiedMessages.value[fullIndex]),
                   content: update.newContent
                 });
               }
             });
             if (updates.length > 0) {
-              publicStore.publicStored = false;
+              unifiedStore.unifiedStored = false;
             }
           }
-          const targetIndex = fullPublicMessages.value?.findIndex(m => String(m.id) === String(messageIdToDelete));
-          if (fullPublicMessages.value && targetIndex !== -1) {
-            fullPublicMessages.value[targetIndex] = toRaw({
-              ...toRaw(fullPublicMessages.value[targetIndex]),
+          const targetIndex = fullUnifiedMessages.value?.findIndex(m => String(m.id) === String(messageIdToDelete));
+          if (fullUnifiedMessages.value && targetIndex !== -1) {
+            fullUnifiedMessages.value[targetIndex] = toRaw({
+              ...toRaw(fullUnifiedMessages.value[targetIndex]),
               content: recallJson,
               isRecalled: true,
               isSystemMessage: true
             });
-            publicStore.publicStored = false;
+            unifiedStore.unifiedStored = false;
           }
-          const displayIndex = publicStore.publicMessages?.findIndex(m => String(m.id) === String(messageIdToDelete));
+          const displayIndex = unifiedStore.unifiedMessages?.findIndex(m => String(m.id) === String(messageIdToDelete));
           if (displayIndex !== -1) {
-            publicStore.publicMessages[displayIndex] = toRaw({
-              ...toRaw(publicStore.publicMessages[displayIndex]),
+            unifiedStore.unifiedMessages[displayIndex] = toRaw({
+              ...toRaw(unifiedStore.unifiedMessages[displayIndex]),
               content: recallJson,
               isRecalled: true,
               isSystemMessage: true
@@ -487,10 +487,10 @@ export const useStorageStore = defineStore('storage', () => {
           }
           // 离线拉取期间（loading=true）原消息在 cache 数组中，也要同步标记，
           // 否则合并进显示列表时会以原始文本/JSON 内容显示
-          const publicCacheIndex = cachePublicMessages.findIndex(m => String(m.id) === String(messageIdToDelete));
-          if (publicCacheIndex !== -1) {
-            cachePublicMessages[publicCacheIndex] = toRaw({
-              ...toRaw(cachePublicMessages[publicCacheIndex]),
+          const unifiedCacheIndex = cacheUnifiedMessages.findIndex(m => String(m.id) === String(messageIdToDelete));
+          if (unifiedCacheIndex !== -1) {
+            cacheUnifiedMessages[unifiedCacheIndex] = toRaw({
+              ...toRaw(cacheUnifiedMessages[unifiedCacheIndex]),
               content: recallJson,
               isRecalled: true,
               isSystemMessage: true
@@ -498,28 +498,28 @@ export const useStorageStore = defineStore('storage', () => {
           }
         }
       }
-      const targetMessages = baseStore.loading ? cachePublicMessages : (publicStore.publicMessages || []);
+      const targetMessages = baseStore.loading ? cacheUnifiedMessages : (unifiedStore.unifiedMessages || []);
       const exists = targetMessages.some(m => m.id === processedMessage.id);
-      const fullExists = fullPublicMessages.value?.some(m => m.id === processedMessage.id) || false;
+      const fullExists = fullUnifiedMessages.value?.some(m => m.id === processedMessage.id) || false;
 
       if (!fullExists) {
-        if (fullPublicMessages.value === null) {
-          fullPublicMessages.value = [processedMessage];
+        if (fullUnifiedMessages.value === null) {
+          fullUnifiedMessages.value = [processedMessage];
         } else {
-          fullPublicMessages.value.push(processedMessage);
+          fullUnifiedMessages.value.push(processedMessage);
         }
-        publicStore.publicStored = false;
+        unifiedStore.unifiedStored = false;
       }
 
       if (!onlySaveToDB && !exists && !isWithdrawMessage && !isUserInfoUpdateMessage) {
         if (baseStore.loading) {
-          cachePublicMessages.push(processedMessage);
+          cacheUnifiedMessages.push(processedMessage);
         } else {
-          publicStore.publicMessages.push(processedMessage);
-          publicStore.publicStored = false;
+          unifiedStore.unifiedMessages.push(processedMessage);
+          unifiedStore.unifiedStored = false;
         }
       } else if (exists) {
-        publicStore.publicStored = false;
+        unifiedStore.unifiedStored = false;
       }
       if (processedMessage.id > publicAndGroupMinId.value) {
         publicAndGroupMinId.value = processedMessage.id;
@@ -804,7 +804,7 @@ export const useStorageStore = defineStore('storage', () => {
     const baseStore = useBaseStore();
     const friendStore = useFriendStore();
     const groupStore = useGroupStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const unreadStore = useUnreadStore();
 
     const currentUser = baseStore.currentUser;
@@ -826,7 +826,7 @@ export const useStorageStore = defineStore('storage', () => {
 
     const userInfoUpdateMessages = [];
 
-    const existingPublicMessageIds = new Set(fullPublicMessages.value ? fullPublicMessages.value.map(m => m.id) : []);
+    const existingUnifiedMessageIds = new Set(fullUnifiedMessages.value ? fullUnifiedMessages.value.map(m => m.id) : []);
     const existingGroupMessageIds = {};
     Object.keys(fullGroupMessages.value).forEach(groupId => {
       existingGroupMessageIds[groupId] = new Set(fullGroupMessages.value[groupId].map(m => m.id));
@@ -843,6 +843,8 @@ export const useStorageStore = defineStore('storage', () => {
       const res = await getOfflineMessages(publicAndGroupMinIdParam, privateMinIdParam);
       const data = res.data;
 
+      // 注意：publicMessages 是后端 /api/offline-messages 的返回键名（接口契约），
+      // 不随前端 UnifiedChat 改名而变
       if (data.publicMessages && data.publicMessages.length > 0) {
         data.publicMessages.forEach(message => {
           if (message.message_type === 102) {
@@ -881,8 +883,8 @@ export const useStorageStore = defineStore('storage', () => {
         baseStore.loading = false;
         baseStore.isFetchingOfflineMessages = false;
 
-        if (cachePublicMessages.length > 0) {
-          const newMessages = cachePublicMessages.filter(m => !existingPublicMessageIds.has(m.id));
+        if (cacheUnifiedMessages.length > 0) {
+          const newMessages = cacheUnifiedMessages.filter(m => !existingUnifiedMessageIds.has(m.id));
 
           if (newMessages.length > 0) {
             const otherUserMessages = newMessages.filter(m => String(m.userId) !== String(currentUser?.id) && !m.isRead);
@@ -894,18 +896,18 @@ export const useStorageStore = defineStore('storage', () => {
             }
           }
 
-          if (fullPublicMessages.value === null) {
-            fullPublicMessages.value = [...newMessages, ...(publicStore.publicMessages || [])];
+          if (fullUnifiedMessages.value === null) {
+            fullUnifiedMessages.value = [...newMessages, ...(unifiedStore.unifiedMessages || [])];
           } else {
-            const fullIds = new Set(fullPublicMessages.value.map(m => m.id));
+            const fullIds = new Set(fullUnifiedMessages.value.map(m => m.id));
             const fullNewMessages = newMessages.filter(m => !fullIds.has(m.id));
-            fullPublicMessages.value = [...fullNewMessages, ...fullPublicMessages.value];
+            fullUnifiedMessages.value = [...fullNewMessages, ...fullUnifiedMessages.value];
           }
 
           const displayNewMessages = newMessages.filter(m => m.messageType !== 101 && m.messageType !== 102);
-          const combinedMessages = [...publicStore.publicMessages, ...displayNewMessages];
-          publicStore.publicMessages = combinedMessages.slice(Math.max(0, combinedMessages.length - 20), combinedMessages.length);
-          cachePublicMessages.length = 0;
+          const combinedMessages = [...unifiedStore.unifiedMessages, ...displayNewMessages];
+          unifiedStore.unifiedMessages = combinedMessages.slice(Math.max(0, combinedMessages.length - 20), combinedMessages.length);
+          cacheUnifiedMessages.length = 0;
         }
 
         Object.keys(cacheGroupMessages).forEach(groupId => {
@@ -1007,7 +1009,7 @@ export const useStorageStore = defineStore('storage', () => {
         });
         Object.keys(cachePrivateMessages).forEach(key => delete cachePrivateMessages[key]);
 
-        publicStore.publicStored = false;
+        unifiedStore.unifiedStored = false;
         Object.keys(groupStore.groupMessages).forEach(id => { groupStore.groupStored[id] = false; });
         Object.keys(friendStore.privateMessages).forEach(id => { friendStore.privateStored[id] = false; });
         await saveToStorage();
@@ -1024,8 +1026,8 @@ export const useStorageStore = defineStore('storage', () => {
 
         await saveMinIds();
       } else {
-        if (cachePublicMessages.length > 0) {
-          const newMessages = cachePublicMessages.filter(m => !existingPublicMessageIds.has(m.id) && m.messageType !== 101 && m.messageType !== 102);
+        if (cacheUnifiedMessages.length > 0) {
+          const newMessages = cacheUnifiedMessages.filter(m => !existingUnifiedMessageIds.has(m.id) && m.messageType !== 101 && m.messageType !== 102);
 
           if (newMessages.length > 0) {
             const otherUserMessages = newMessages.filter(m => String(m.userId) !== String(currentUser?.id) && !m.isRead);
@@ -1037,14 +1039,14 @@ export const useStorageStore = defineStore('storage', () => {
             }
           }
 
-          if (fullPublicMessages.value === null) {
-            fullPublicMessages.value = [...cachePublicMessages];
+          if (fullUnifiedMessages.value === null) {
+            fullUnifiedMessages.value = [...cacheUnifiedMessages];
           } else {
-            const fullIds = new Set(fullPublicMessages.value.map(m => m.id));
-            const fullNewMessages = cachePublicMessages.filter(m => !fullIds.has(m.id));
-            fullPublicMessages.value = [...fullPublicMessages.value, ...fullNewMessages];
+            const fullIds = new Set(fullUnifiedMessages.value.map(m => m.id));
+            const fullNewMessages = cacheUnifiedMessages.filter(m => !fullIds.has(m.id));
+            fullUnifiedMessages.value = [...fullUnifiedMessages.value, ...fullNewMessages];
           }
-          cachePublicMessages.length = 0;
+          cacheUnifiedMessages.length = 0;
         }
 
         Object.keys(cacheGroupMessages).forEach(groupId => {
@@ -1110,7 +1112,7 @@ export const useStorageStore = defineStore('storage', () => {
         });
         Object.keys(cachePrivateMessages).forEach(key => delete cachePrivateMessages[key]);
 
-        publicStore.publicStored = false;
+        unifiedStore.unifiedStored = false;
         Object.keys(fullGroupMessages.value).forEach(id => { groupStore.groupStored[id] = false; });
         Object.keys(fullPrivateMessages.value).forEach(id => { friendStore.privateStored[id] = false; });
         await saveToStorage();
@@ -1186,8 +1188,8 @@ export const useStorageStore = defineStore('storage', () => {
       doUpdateMsgContent(msg);
     };
 
-    if (fullPublicMessages.value) {
-      fullPublicMessages.value.forEach(msg => {
+    if (fullUnifiedMessages.value) {
+      fullUnifiedMessages.value.forEach(msg => {
         if (String(msg.userId) === String(userId) || String(msg.sender_id) === String(userId) || String(msg.senderId) === String(userId)) {
           updateMsg(msg);
         } else if (msg.messageType === 100 && updates.nickname) {
@@ -1298,9 +1300,16 @@ export const useStorageStore = defineStore('storage', () => {
       if (typeof content === 'string' && content.startsWith('{')) {
         try {
           const parsed = JSON.parse(content);
-          if (parsed.type === 'quoted') {
-            if (parsed.quoted) return `[引用] ${parseQuotedContent(parsed.quoted)}`;
-            if (parsed.text) return `[引用] ${parsed.text}`;
+          // 引用消息有两种存储结构：
+          //  主聊天室/群聊 { type:'quoted', text:'回复文字', quoted:{...} }
+          //  私信           { content:'回复文字', quotedMessage:{...} }
+          if (parsed.type === 'quoted' || parsed.quotedMessage) {
+            // 统一显示引用消息自身的文本（回复者输入的文字），
+            // 不是被引用消息的原文（quoted / quotedMessage）
+            const ownText = parsed.text || parsed.content || '';
+            const quotedMsg = parsed.quoted || parsed.quotedMessage;
+            if (ownText) return `[引用] ${ownText}`;
+            if (quotedMsg) return `[引用] ${parseQuotedContent(quotedMsg)}`;
           }
         } catch {}
       }
@@ -1314,7 +1323,13 @@ export const useStorageStore = defineStore('storage', () => {
     if (typeof content === 'string' && (content.startsWith('{') || content.startsWith('['))) {
       try {
         const parsed = JSON.parse(content);
-        if (parsed.type === 'quoted' && parsed.quoted) return `[引用] ${parseQuotedContent(parsed.quoted)}`;
+        // 兜底分支同样兼容主聊天室/群聊与私信两种引用结构
+        if (parsed.type === 'quoted' || parsed.quotedMessage) {
+          const ownText = parsed.text || parsed.content || '';
+          const quotedMsg = parsed.quoted || parsed.quotedMessage;
+          if (ownText) return `[引用] ${ownText}`;
+          if (quotedMsg) return `[引用] ${parseQuotedContent(quotedMsg)}`;
+        }
       } catch {}
     }
 
@@ -1325,7 +1340,7 @@ export const useStorageStore = defineStore('storage', () => {
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
     const unreadStore = useUnreadStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
 
     try {
       const prefix = getStorageKeyPrefix();
@@ -1435,7 +1450,7 @@ export const useStorageStore = defineStore('storage', () => {
         });
       } catch {}
 
-      publicStore.publicStored = false;
+      unifiedStore.unifiedStored = false;
       await saveToStorage();
 
       return true;
@@ -1558,10 +1573,10 @@ export const useStorageStore = defineStore('storage', () => {
   }
 
   function clearAllCache() {
-    cachePublicMessages.length = 0;
+    cacheUnifiedMessages.length = 0;
     Object.keys(cacheGroupMessages).forEach(key => delete cacheGroupMessages[key]);
     Object.keys(cachePrivateMessages).forEach(key => delete cachePrivateMessages[key]);
-    fullPublicMessages.value = null;
+    fullUnifiedMessages.value = null;
     fullGroupMessages.value = {};
     fullPrivateMessages.value = {};
     publicAndGroupMinId.value = 0;
@@ -1689,8 +1704,8 @@ export const useStorageStore = defineStore('storage', () => {
       });
     };
 
-    if (fullPublicMessages.value) {
-      updateMessages(fullPublicMessages.value);
+    if (fullUnifiedMessages.value) {
+      updateMessages(fullUnifiedMessages.value);
     }
 
     Object.keys(fullGroupMessages.value).forEach(groupId => {
@@ -1772,7 +1787,7 @@ export const useStorageStore = defineStore('storage', () => {
     }
   }
 
-  async function savePublicMessageToIndexedDB(message) {
+  async function saveUnifiedMessageToIndexedDB(message) {
     const prefix = getStorageKeyPrefix();
     const key = `${prefix}-public`;
     try {
@@ -1791,15 +1806,15 @@ export const useStorageStore = defineStore('storage', () => {
     }
   }
 
-  function getCachePublic() { return cachePublicMessages; }
-  function setCachePublic(val) { cachePublicMessages = val; }
+  function getCacheUnified() { return cacheUnifiedMessages; }
+  function setCacheUnified(val) { cacheUnifiedMessages = val; }
   function getCacheGroup() { return cacheGroupMessages; }
   function setCacheGroup(val) { cacheGroupMessages = val; }
   function getCachePrivate() { return cachePrivateMessages; }
   function setCachePrivate(val) { cachePrivateMessages = val; }
 
   return {
-    fullPublicMessages,
+    fullUnifiedMessages,
     fullGroupMessages,
     fullPrivateMessages,
     sessionLastMessageTimes,
@@ -1828,9 +1843,9 @@ export const useStorageStore = defineStore('storage', () => {
     processUserInfoUpdateForRecallMessages,
     savePrivateMessageToIndexedDB,
     saveGroupMessageToIndexedDB,
-    savePublicMessageToIndexedDB,
-    getCachePublic,
-    setCachePublic,
+    saveUnifiedMessageToIndexedDB,
+    getCacheUnified,
+    setCacheUnified,
     getCacheGroup,
     setCacheGroup,
     getCachePrivate,

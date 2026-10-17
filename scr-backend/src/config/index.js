@@ -148,6 +148,22 @@ export const messageConfig = {
 };
 
 // ============================================
+// 人机验证配置
+// ============================================
+// human-verify 1.3.0 起 createSession({ workers }) 可指定生图 worker 线程数，
+// 范围 1-32，默认 4，非法值由库回退为默认。
+// 每个 worker 是独立 V8 isolate，实测常驻约 12~15MB；
+// 线程池为惰性创建（首次生成验证码时才建），不生成验证码则不占内存。
+export const verifyConfig = {
+  // 生图 worker 线程数：低流量（DAU 数十）建议 1；验证码高峰期可调 2~4
+  workers: (() => {
+    const raw = parseInt(process.env.HUMAN_VERIFY_WORKERS, 10);
+    if (Number.isNaN(raw) || raw < 1) return 4;
+    return Math.min(raw, 32);
+  })()
+};
+
+// ============================================
 // 定时任务配置
 // ============================================
 export const cronConfig = {
@@ -195,6 +211,7 @@ export default {
   uploadConfig,
   sessionConfig,
   messageConfig,
+  verifyConfig,
   cronConfig,
   securityConfig,
   logConfig,

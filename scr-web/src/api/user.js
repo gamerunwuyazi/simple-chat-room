@@ -130,3 +130,10 @@ export function cancelFriendRequest(friendId) {
 export function checkUserBlockStatus(userId) {
  return request.get(`/api/user/check-block-status/${userId}`);
 }
+
+/**
+ * 获取黑名单列表
+ */
+export function getBlockList() {
+ return request.get('/api/user/block-list');
+}

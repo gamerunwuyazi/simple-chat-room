@@ -20,8 +20,9 @@ function getDb() {
       user: dbConfig.user,
       password: dbConfig.password,
       database: dbConfig.database,
-      // 2 个 worker × 15 = 30 连接；配合主池 150，远低于 MySQL max_connections(500)
-      connectionLimit: 15,
+      // 每个 worker × 连接数需计入总连接预算；worker 池默认 1，配合主池 150，
+      // 远低于 MySQL max_connections(500)。可按需用 WORKER_DB_CONNECTION_LIMIT 调整。
+      connectionLimit: parseInt(process.env.WORKER_DB_CONNECTION_LIMIT || '8', 10),
       // 空闲连接管理：mysql2 仅在 maxIdle < connectionLimit 时才启动空闲回收器，
       // 空闲 3 小时后由客户端主动断开（早于 MySQL wait_timeout 默认 8h），防止连接腐化
       maxIdle: 10,

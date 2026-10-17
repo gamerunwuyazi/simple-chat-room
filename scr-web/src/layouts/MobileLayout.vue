@@ -52,7 +52,7 @@
         <div class="mobile-chat-header">
           <button class="mobile-back-btn" @click="goBack">← 返回</button>
           <span class="mobile-chat-title">{{ chatTitle }}</span>
-          <button v-if="isPublicChat" class="mobile-user-list-btn" @click="showUserDrawer = true">用户</button>
+          <button v-if="isUnifiedChat" class="mobile-user-list-btn" @click="showUserDrawer = true">用户</button>
           <button v-else-if="currentTab === 'group'" class="mobile-header-action" @click="triggerGroupInfo">信息</button>
           <button v-else-if="currentTab === 'private'" class="mobile-header-action" @click="triggerPrivateUserInfo">资料</button>
           <span v-else class="mobile-chat-spacer"></span>
@@ -65,7 +65,7 @@
 
     <!-- 底部导航栏 -->
     <div id="mobile-tab-bar">
-      <div class="mobile-tab" :class="{ active: currentTab === 'public' }" @click="switchTab('public')">
+      <div class="mobile-tab" :class="{ active: currentTab === 'unified' }" @click="switchTab('unified')">
         <span class="mobile-tab-icon"><i class="fas fa-comments tab-icon-img"></i></span>
         <span class="mobile-tab-label">公共</span>
         <span v-if="totalUnread" class="mobile-tab-badge">{{ totalUnread > 99 ? '99+' : totalUnread }}</span>
@@ -127,16 +127,16 @@ onUnmounted(() => {
 // 当前激活的底部标签
 const currentTab = computed(() => {
   const path = route.path;
-  if (path === '/chat' || path === '/chat/') return 'public';
+  if (path === '/chat' || path === '/chat/') return 'unified';
   if (path.startsWith('/chat/group')) return 'group';
   if (path.startsWith('/chat/private')) return 'private';
   if (path.startsWith('/chat/settings')) return 'settings';
-  return 'public';
+  return 'unified';
 });
 
 // 是否在聊天中（公共聊天始终显示，群聊/私聊/设置需选中具体会话）
 const isInChat = computed(() => {
-  if (currentTab.value === 'public') return true;
+  if (currentTab.value === 'unified') return true;
   if (currentTab.value === 'group') return !!sessionStore.currentGroupId;
   if (currentTab.value === 'private') return !!sessionStore.currentPrivateChatUserId;
   if (currentTab.value === 'settings') return showSettingsDetail.value;
@@ -144,7 +144,7 @@ const isInChat = computed(() => {
 });
 
 // 是否为公共聊天
-const isPublicChat = computed(() => currentTab.value === 'public');
+const isUnifiedChat = computed(() => currentTab.value === 'unified');
 
 // 聊天标题
 const chatTitle = computed(() => {
@@ -161,7 +161,7 @@ const chatTitle = computed(() => {
 });
 
 // 未读计数
-const publicUnread = computed(() => unreadStore.unreadMessages?.global || 0);
+const unifiedUnread = computed(() => unreadStore.unreadMessages?.global || 0);
 
 const groupUnread = computed(() => {
   if (!unreadStore.unreadMessages?.groups) return 0;
@@ -192,7 +192,7 @@ const friendRequestUnread = computed(() => {
 
 // 公共 tab 角标 = 主聊天室 + 群组 + 私信所有未读总和
 const totalUnread = computed(() => {
-  return publicUnread.value + groupUnread.value + privateUnread.value;
+  return unifiedUnread.value + groupUnread.value + privateUnread.value;
 });
 
 // 工具函数

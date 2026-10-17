@@ -4,7 +4,7 @@ import { useBaseStore } from './baseStore';
 import { useFriendStore } from './friendStore';
 import { useGroupStore } from './groupStore';
 import { useStorageStore } from './storageStore';
-import { usePublicStore } from './publicStore';
+import { useUnifiedStore } from './unifiedStore';
 
 export const useUserStore = defineStore('user', () => {
   const onlineUsers = ref([]);
@@ -58,7 +58,7 @@ export const useUserStore = defineStore('user', () => {
 
   function updateUserInfoInMessages(userId, userInfo) {
     const storageStore = useStorageStore();
-    const publicStore = usePublicStore();
+    const unifiedStore = useUnifiedStore();
     const groupStore = useGroupStore();
     const friendStore = useFriendStore();
 
@@ -90,13 +90,13 @@ export const useUserStore = defineStore('user', () => {
       }
     }
 
-    if (storageStore.fullPublicMessages && storageStore.fullPublicMessages.length > 0) {
-      for (let i = 0; i < storageStore.fullPublicMessages.length; i++) {
-        if (String(storageStore.fullPublicMessages[i].sender_id) === userIdStr || String(storageStore.fullPublicMessages[i].userId) === userIdStr) {
-          if (userInfo.nickname) storageStore.fullPublicMessages[i].nickname = userInfo.nickname;
-          if (userInfo.avatarUrl) storageStore.fullPublicMessages[i].avatarUrl = userInfo.avatarUrl;
+    if (storageStore.fullUnifiedMessages && storageStore.fullUnifiedMessages.length > 0) {
+      for (let i = 0; i < storageStore.fullUnifiedMessages.length; i++) {
+        if (String(storageStore.fullUnifiedMessages[i].sender_id) === userIdStr || String(storageStore.fullUnifiedMessages[i].userId) === userIdStr) {
+          if (userInfo.nickname) storageStore.fullUnifiedMessages[i].nickname = userInfo.nickname;
+          if (userInfo.avatarUrl) storageStore.fullUnifiedMessages[i].avatarUrl = userInfo.avatarUrl;
         }
-        updateMsgContentFor100(storageStore.fullPublicMessages[i]);
+        updateMsgContentFor100(storageStore.fullUnifiedMessages[i]);
       }
     }
 
@@ -128,8 +128,8 @@ export const useUserStore = defineStore('user', () => {
       }
     }
 
-    if (publicStore.publicMessages && publicStore.publicMessages.length > 0) {
-      publicStore.publicMessages = publicStore.publicMessages.map(msg => {
+    if (unifiedStore.unifiedMessages && unifiedStore.unifiedMessages.length > 0) {
+      unifiedStore.unifiedMessages = unifiedStore.unifiedMessages.map(msg => {
         if (String(msg.sender_id) === userIdStr || String(msg.userId) === userIdStr) {
           const updated = { ...msg, ...(userInfo.nickname && { nickname: userInfo.nickname }), ...(userInfo.avatarUrl && { avatarUrl: userInfo.avatarUrl }) };
           updateMsgContentFor100(updated);
@@ -184,7 +184,7 @@ export const useUserStore = defineStore('user', () => {
       }
     }
 
-    publicStore.publicStored = false;
+    unifiedStore.unifiedStored = false;
     if (groupStore.groupStored) {
       for (const groupId in groupStore.groupStored) groupStore.groupStored[groupId] = false;
     }

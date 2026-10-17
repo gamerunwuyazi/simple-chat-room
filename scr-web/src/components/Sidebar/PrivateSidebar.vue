@@ -13,6 +13,7 @@ import { useModalStore } from '@/stores/modalStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useStorageStore } from '@/stores/storageStore';
 import { switchToPrivateChat } from '@/utils/chat/private';
+import { setActiveChat } from '@/utils/chat/ui';
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -190,17 +191,33 @@ const friendRequestCount = computed(() => (
   Array.isArray(baseStore.receivedFriendRequests) ? baseStore.receivedFriendRequests.length : 0
 ));
 
-// 点击置顶"新的朋友"：取消选中好友，右侧面板切换到好友申请列表
+// 点击置顶"新的朋友"：先保存当前私聊会话草稿，再取消选中好友，右侧面板切换到好友申请列表
 function handleNewFriendsClick() {
   hideContextMenu();
+  // 若当前打开了某个私聊，切换前保存其草稿（与 switchToPrivateChat 一致）
+  if (sessionStore.currentPrivateChatUserId) {
+    setActiveChat('private', null, false);
+  }
   sessionStore.setCurrentPrivateChatUserId(null);
   sessionStore.showFriendRequests = true;
+}
+
+// 点击置顶"黑名单"：先保存当前私聊会话草稿，再取消选中好友，右侧面板切换到黑名单列表
+function handleBlackListClick() {
+  hideContextMenu();
+  if (sessionStore.currentPrivateChatUserId) {
+    setActiveChat('private', null, false);
+  }
+  sessionStore.setCurrentPrivateChatUserId(null);
+  sessionStore.showFriendRequests = false;
+  sessionStore.showBlackList = true;
 }
 
 // 处理好友点击
 function handleFriendClick(friend) {
   hideContextMenu();
   sessionStore.showFriendRequests = false;
+  sessionStore.showBlackList = false;
   const avatarUrl = friend.avatarUrl || friend.avatar_url || friend.avatar || '';
   switchToPrivateChat(friend.id, friend.nickname, friend.username, avatarUrl);
 }
@@ -282,15 +299,28 @@ function handleSearchUserClick() {
                     <div v-if="friendRequestCount > 0" class="unread-count private-unread-count">{{ friendRequestCount > 99 ? '99+' : friendRequestCount }}</div>
                 </li>
 
-                <!-- 分割线：分隔置顶"新的朋友"与普通好友列表 -->
+                <!-- 黑名单：置顶，显示在分割线上方，右侧面板展示已拉黑用户 -->
+                <li class="friend-item new-friends-item"
+                    :class="{ active: sessionStore.showBlackList }"
+                    @click="handleBlackListClick">
+                    <span class="user-avatar-wrapper">
+                        <span class="user-avatar"><i class="fas fa-ban"></i></span>
+                    </span>
+                    <div class="friend-info">
+                        <span class="friend-name">黑名单</span>
+                        <span class="friend-last-message">查看已拉入黑名单的用户</span>
+                    </div>
+                </li>
+
+                <!-- 分割线：分隔置顶"新的朋友/黑名单"与普通好友列表 -->
                 <li class="chat-list-divider"></li>
 
                 <li v-if="friendStore.friendsList.length === 0" class="empty-friends">暂无好友，请先添加好友</li>
-                <li v-else v-for="friend in pagedFriendsList" :key="friend.id" 
+                <li v-else v-for="friend in pagedFriendsList" :key="friend.id"
                     class="friend-item"
                     :data-user-id="friend.id"
                     :data-user-nickname="friend.nickname"
-                    :class="{ 'deleted-item': friend.deleted_at }"
+                    :class="{ 'deleted-item': friend.deleted_at, active: String(sessionStore.currentPrivateChatUserId) === String(friend.id) }"
                     @click="handleFriendClick(friend)"
                     @contextmenu.prevent="handleFriendRightClick($event, friend)">
                     <span class="user-avatar-wrapper">
@@ -460,6 +490,13 @@ function handleSearchUserClick() {
   background-color: #e3f0fc;
 }
 
+/* 当前打开的会话：与消息页面（UnifiedSidebar）一致的深色高亮 */
+.user-list li.active {
+  background-color: #dbe4ef;
+}
+
+/* 深色模式 active 规则统一收归 index.css 全局（避免 scoped :global() 编译异常导致选择器丢失） */
+
 /* 置顶"新的朋友"与普通好友之间的分割线 */
 .user-list .chat-list-divider {
   height: 0;
@@ -481,7 +518,7 @@ body.dark-mode .user-list .new-friends-item .user-avatar {
 }
 
 body.dark-mode .user-list .new-friends-item.active {
-  background-color: #2c3e50;
+  background-color: #1f3a5f !important;
 }
 
 .draft-text {

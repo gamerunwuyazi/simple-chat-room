@@ -46,7 +46,7 @@ watch(
   [
     () => unreadStore.unreadMessages,
     () => groupStore.groupsWithAtMe,
-    () => unreadStore.hasPublicAtMe
+    () => unreadStore.hasUnifiedAtMe
   ],
   () => {
     const unreadMessages = unreadStore.unreadMessages
@@ -78,8 +78,8 @@ watch(
     // 检查是否有@我的消息（群组或主聊天室）
     const groupsWithAtMe = groupStore.groupsWithAtMe || {}
     const hasAnyGroupAtMe = Object.values(groupsWithAtMe).some(v => v === true)
-    const hasPublicAtMe = unreadStore.hasPublicAtMe || false
-    const hasAnyAtMe = hasAnyGroupAtMe || hasPublicAtMe
+    const hasUnifiedAtMe = unreadStore.hasUnifiedAtMe || false
+    const hasAnyAtMe = hasAnyGroupAtMe || hasUnifiedAtMe
 
     if (totalUnread > 0) {
       if (hasAnyAtMe) {

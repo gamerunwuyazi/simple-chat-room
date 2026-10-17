@@ -22,7 +22,7 @@
         <button class="markdown-btn" @click="insertMarkdown('- ', '', '列表项')">列表</button>
         <button class="markdown-btn" @click="insertMarkdown('> ', '', '引用文本')">引用</button>
         <button class="markdown-btn" @click="insertMarkdown('[链接描述](', ')', '链接文本')">链接</button>
-        <button class="markdown-btn" @click="insertMarkdown('![图片无法显示时的文字](', ')', '图片URL')">图片</button>
+        <button class="markdown-btn" @click="insertMarkdown('![图片描述](', ')', '图片URL')">图片</button>
       </div>
 
       <div id="groupMessageContainer" ref="groupMessageContainerRef">
@@ -291,7 +291,7 @@ import { useSessionStore } from "@/stores/sessionStore";
 import { useInputStore } from "@/stores/inputStore";
 import { useDraftStore } from "@/stores/draftStore";
 import { useFriendStore } from "@/stores/friendStore";
-import { usePublicStore } from "@/stores/publicStore";
+import { useUnifiedStore } from "@/stores/unifiedStore";
 import { useModalStore } from "@/stores/modalStore";
 import { 
   setActiveChat, 
@@ -319,7 +319,7 @@ const inputStore = useInputStore();
 const draftStore = useDraftStore();
 const { scrollAndHighlight } = useMessageHighlight();
 const friendStore = useFriendStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const modalStore = useModalStore();
 const route = useRoute();
 
@@ -1350,7 +1350,7 @@ watch(
       inputStore.clearQuotedMessage();
       groupStore.clearOtherGroupMessages(sessionStore.currentGroupId);
       friendStore.clearOtherPrivateMessages(null);
-      publicStore.clearPublicMessagesExceptRecent();
+      unifiedStore.clearUnifiedMessagesExceptRecent();
     }
   }
 );
@@ -1419,5 +1419,13 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('group-switched', handleGroupSwitched);
   window.removeEventListener('group-members-changed', handleGroupMembersChanged);
+  // 离开群聊时保存草稿（消息页嵌入面板或独立路由页卸载均触发，此时 ref 仍指向输入框）
+  const groupId = sessionStore.currentGroupId;
+  const inputEl = groupMessageInputRef.value;
+  if (groupId && inputEl && !restoringGroupDraft) {
+    const content = inputEl.textContent || inputEl.innerHTML || '';
+    draftStore.saveDraft('group', groupId, content);
+    draftStore.setLastMessageToDraft('group', groupId);
+  }
 });
 </script>

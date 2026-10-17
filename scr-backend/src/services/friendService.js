@@ -1304,17 +1304,26 @@ export async function handleUnblockUser(req, res, io) {
       [userId, targetIdNum]
     );
 
-    if (existingBlock.length === 0 || (existingBlock[0].status !== 4 && existingBlock[0].status !== 10)) {
-      return res.status(400).json({ status: 'error', message: '未拉黑该用户' });
-    }
-
     const [existingReverse] = await pool.execute(
       'SELECT id, status FROM scr_friends WHERE user_id = ? AND friend_id = ?',
       [targetIdNum, userId]
     );
 
-    const isMutualUnblocking = existingBlock[0].status === 10;
+    const myStatus = existingBlock.length > 0 ? existingBlock[0].status : null;
+    const theirStatus = existingReverse.length > 0 ? existingReverse[0].status : null;
+
+    // 黑名单状态判定（含污点）：删除好友后"我->对方"的正向行可能已被删除，
+    // "被我拉黑"的污点只残留在"对方->我"的反向行，两个方向都要查
+    const forwardBlocked = myStatus !== null && [4, 10, 11, 12, 13, 14].includes(myStatus);
+    const reverseBlocked = theirStatus !== null && [0, 5, 7, 8, 9, 10, 11, 12, 13, 14].includes(theirStatus);
+
+    if (!forwardBlocked && !reverseBlocked) {
+      return res.status(400).json({ status: 'error', message: '未拉黑该用户' });
+    }
+
+    const isMutualUnblocking = myStatus === 10;
     let hasStatusZero = false;
+    let theyStillBlockMe = false;
 
     await pool.query('START TRANSACTION');
 
@@ -1339,10 +1348,42 @@ export async function handleUnblockUser(req, res, io) {
           );
         }
       } else {
-        const hasStatusZero = existingBlock[0].status === 0 ||
-                             (existingReverse.length > 0 && existingReverse[0].status === 0);
+        // 仅剩污点记录（正向"拉黑(4)"行不存在或已是污点态）时无法恢复好友；
+        // 存在有效拉黑(4)时才恢复为好友(1)
+        const isStainOnly = myStatus !== 4;
+        hasStatusZero = isStainOnly;
 
-        if (hasStatusZero) {
+        // 对方仍拉黑我的证据：
+        //  - 对方行处于双向拉黑/双向污点（10,11,12,13,14）
+        //  - 或我方行本身就是"被对方拉黑"的载体（0 被拉黑后删除 / 5 被拉黑）
+        theyStillBlockMe = [10, 11, 12, 13, 14].includes(theirStatus) ||
+          [0, 5].includes(myStatus);
+
+        if (theyStillBlockMe) {
+          // 只解除我方的拉黑：我方行改写为"被对方拉黑后删除(0)"，
+          // 作为对方仍拉黑我的载体；对方行删除其双向污点残留，
+          // 避免双向污点被黑名单反向查询算成"我拉黑对方"
+          if (myStatus !== 0 && myStatus !== 5) {
+            if (myStatus !== null) {
+              await pool.execute(
+                'UPDATE scr_friends SET status = 0, created_at = NOW() WHERE user_id = ? AND friend_id = ?',
+                [userId, targetIdNum]
+              );
+            } else {
+              await pool.execute(
+                'INSERT INTO scr_friends (user_id, friend_id, status, created_at) VALUES (?, ?, 0, NOW())',
+                [userId, targetIdNum]
+              );
+            }
+          }
+
+          if (existingReverse.length > 0) {
+            await pool.execute(
+              'DELETE FROM scr_friends WHERE user_id = ? AND friend_id = ?',
+              [targetIdNum, userId]
+            );
+          }
+        } else if (hasStatusZero) {
           await pool.execute(
             'DELETE FROM scr_friends WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)',
             [userId, targetIdNum, targetIdNum, userId]
@@ -1371,8 +1412,10 @@ export async function handleUnblockUser(req, res, io) {
 
       res.json({
         status: 'success',
-        message: isMutualUnblocking ? '已取消拉黑，对方仍拉黑着你' : (hasStatusZero ? '已取消拉黑并清除记录' : '已取消拉黑，恢复好友关系'),
-        isMutualUnblocking: isMutualUnblocking
+        message: (isMutualUnblocking || theyStillBlockMe)
+          ? '已取消拉黑，对方仍拉黑着你'
+          : (hasStatusZero ? '已取消拉黑并清除记录' : '已取消拉黑，恢复好友关系'),
+        isMutualUnblocking: isMutualUnblocking || theyStillBlockMe
       });
     } catch (err) {
       await pool.query('ROLLBACK');
@@ -1381,6 +1424,57 @@ export async function handleUnblockUser(req, res, io) {
   } catch (err) {
     console.error('取消拉黑失败:', err.message);
     res.status(500).json({ status: 'error', message: '取消拉黑失败' });
+  }
+}
+
+export async function handleGetBlockList(req, res, io) {
+  try {
+    const userId = parseInt(req.userId);
+
+    // 黑名单 = 被我拉黑的用户（任意状态，含污点记录）
+    // 正向（我 -> 对方）：4 拉黑 / 10 双向拉黑 / 11,12 双向拉黑后删除污点 / 13,14 待处理双向污点
+    // 反向（对方 -> 我）：删除好友后正向行可能已被删除，"被我拉黑"的污点只残留在反向行：
+    //   0 被拉黑后删除 / 5 被拉黑 / 7,8 待处理已拉黑 / 9 彻底清除 / 10,11,12 双向拉黑污点 / 13,14 待处理双向污点
+    const [forwardRows] = await pool.execute(`
+      SELECT sf.friend_id AS user_id, cu.nickname, cu.username, cu.avatar_url, sf.status, sf.created_at
+      FROM scr_friends sf
+      INNER JOIN scr_users cu ON cu.id = sf.friend_id
+      WHERE sf.user_id = ? AND sf.status IN (4, 10, 11, 12, 13, 14)
+    `, [userId]);
+
+    const [reverseRows] = await pool.execute(`
+      SELECT sf.user_id AS user_id, cu.nickname, cu.username, cu.avatar_url, sf.status, sf.created_at
+      FROM scr_friends sf
+      INNER JOIN scr_users cu ON cu.id = sf.user_id
+      WHERE sf.friend_id = ? AND sf.status IN (0, 5, 7, 8, 9, 10, 11, 12, 13, 14)
+    `, [userId]);
+
+    // 双向行去重（同一用户只保留最新记录），按拉黑时间倒序
+    const blockedMap = new Map();
+    for (const row of [...forwardRows, ...reverseRows]) {
+      const existing = blockedMap.get(row.user_id);
+      if (!existing || new Date(row.created_at) > new Date(existing.created_at)) {
+        blockedMap.set(row.user_id, row);
+      }
+    }
+
+    const blockedUsers = [...blockedMap.values()]
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+      .map(row => ({
+        id: row.user_id,
+        nickname: row.nickname,
+        username: row.username,
+        avatarUrl: row.avatar_url,
+        blockStatus: row.status
+      }));
+
+    res.json({
+      status: 'success',
+      users: blockedUsers
+    });
+  } catch (err) {
+    console.error('获取黑名单失败:', err.message);
+    res.status(500).json({ status: 'error', message: '获取黑名单失败' });
   }
 }
 

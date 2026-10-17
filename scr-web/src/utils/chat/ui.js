@@ -17,7 +17,7 @@ import {
   useUserStore,
   useFriendStore,
   useGroupStore,
-  usePublicStore,
+  useUnifiedStore,
   useModalStore,
   useSessionStore,
   useStorageStore,
@@ -144,12 +144,12 @@ function updateUnreadCountsDisplay() {
   const unreadStore = useUnreadStore();
   const unreadMessages = unreadStore?.unreadMessages || { global: 0, groups: {}, private: {} };
   
-  const publicChatUnreadEl = document.getElementById('publicChatUnreadCount');
-  if (publicChatUnreadEl) {
+  const unifiedChatUnreadEl = document.getElementById('unifiedChatUnreadCount');
+  if (unifiedChatUnreadEl) {
     if (unreadMessages.global > 0) {
-      publicChatUnreadEl.textContent = unreadMessages.global;
+      unifiedChatUnreadEl.textContent = unreadMessages.global;
     } else {
-      publicChatUnreadEl.textContent = '';
+      unifiedChatUnreadEl.textContent = '';
     }
   }
 
@@ -201,9 +201,16 @@ function initializeFocusListeners() {
 function handlePrivateChatAreaInteraction() {
   const router = getRouter();
   const currentPath = router?.currentRoute?.value?.path || window.location.pathname || '';
-  if (!currentPath.startsWith('/chat/private')) return;
-
   const sessionStore = useSessionStore();
+
+  // 支持两种位置的私信：独立私信页 /chat/private，
+  // 以及消息页 /chat 右侧嵌入的私信面板（chatPanelType === 'private'）
+  const isMainRoute = currentPath === '/chat' || currentPath === '/chat/' ||
+    (currentPath.startsWith('/chat') && !currentPath.startsWith('/chat/group') && !currentPath.startsWith('/chat/private'));
+  const isPrivateActive = currentPath.startsWith('/chat/private') ||
+    (isMainRoute && sessionStore?.chatPanelType === 'private');
+  if (!isPrivateActive) return;
+
   const partnerId = sessionStore?.currentPrivateChatUserId;
   if (!partnerId) return;
 
@@ -254,8 +261,27 @@ function tryClearUnreadForCurrentRoute() {
     if (unreadStore && unreadStore.clearGlobalUnread) {
       unreadStore.clearGlobalUnread();
       updateUnreadCountsDisplay();
+    }
+    // 消息页 /chat 右侧嵌入面板：对齐对应独立页面的聚焦清除行为
+    const panelType = sessionStore && sessionStore.chatPanelType;
+    if (panelType === 'group' && sessionStore.currentGroupId) {
+      // 同 /chat/group 页面：聚焦时清群未读 + 清@标记
+      if (unreadStore && unreadStore.clearGroupUnread) {
+        unreadStore.clearGroupUnread(sessionStore.currentGroupId);
+        updateUnreadCountsDisplay();
+      }
+      const groupStore = useGroupStore();
+      if (groupStore && groupStore.clearGroupHasAtMe) {
+        groupStore.clearGroupHasAtMe(sessionStore.currentGroupId);
+      }
       return true;
     }
+    if (panelType === 'private') {
+      // 同 /chat/private 页面：聚焦不清除，只在鼠标于 #chat-main 移动/点击时清除
+      // （见 handlePrivateChatAreaInteraction）
+      return false;
+    }
+    return true;
   } else if (isGroupRoute && sessionStore && sessionStore.currentGroupId) {
     if (unreadStore && unreadStore.clearGroupUnread) {
       unreadStore.clearGroupUnread(sessionStore.currentGroupId);
@@ -291,7 +317,6 @@ function handleFocusChange() {
 function setActiveChat(chatType, id = null, clearUnread = false) {
   const sessionStore = useSessionStore();
   const draftStore = useDraftStore();
-  const inputStore = useInputStore();
   const unreadStore = useUnreadStore();
   
   let oldChatType = null;
@@ -310,31 +335,25 @@ function setActiveChat(chatType, id = null, clearUnread = false) {
     }
   }
   
-  if (draftStore && oldChatType && draftStore.saveDraft) {
-    let draftContent = '';
+  // 保存旧会话草稿：只从仍在 DOM 中的对应输入框读取（可确认内容属于该会话）；
+  // 输入框不存在时不读写草稿——inputStore 的输入内容是全局单槽，回退读取会把
+  // 其他会话的残留内容误存到当前会话草稿
+  if (draftStore && oldChatType && (oldChatId || oldChatType === 'main') && draftStore.saveDraft) {
+    let draftContent = null;
     if (oldChatType === 'main') {
-      const mainMessageInput = document.getElementById('messageInput');
-      if (mainMessageInput) {
-        draftContent = mainMessageInput.innerHTML;
-      } else if (inputStore && inputStore.mainMessageInput) {
-        draftContent = inputStore.mainMessageInput;
-      }
+      const el = document.getElementById('messageInput');
+      // 草稿仅用于侧边栏列表显示，存纯文本
+      if (el) draftContent = el.textContent;
     } else if (oldChatType === 'group') {
-      const groupMessageInput = document.getElementById('groupMessageInput');
-      if (groupMessageInput) {
-        draftContent = groupMessageInput.innerHTML;
-      } else if (inputStore && inputStore.groupMessageInput) {
-        draftContent = inputStore.groupMessageInput;
-      }
+      const el = document.getElementById('groupMessageInput');
+      if (el) draftContent = el.innerHTML;
     } else if (oldChatType === 'private') {
-      const privateMessageInput = document.getElementById('privateMessageInput');
-      if (privateMessageInput) {
-        draftContent = privateMessageInput.innerHTML;
-      } else if (inputStore && inputStore.privateMessageInput) {
-        draftContent = inputStore.privateMessageInput;
-      }
+      const el = document.getElementById('privateMessageInput');
+      if (el) draftContent = el.innerHTML;
     }
-    draftStore.saveDraft(oldChatType, oldChatId, draftContent);
+    if (draftContent !== null) {
+      draftStore.saveDraft(oldChatType, oldChatId, draftContent);
+    }
   }
   
   if (chatType === 'main') {
@@ -492,8 +511,8 @@ async function initializeChat() {
             const router = getRouter?.();
             const currentPath = router?.currentRoute?.value?.path || window.location.pathname || '';
             if (currentPath === '/chat' || currentPath === '/chat/') {
-              const publicChatEl = document.querySelector('.chat-content[data-content="public-chat"]');
-              if (publicChatEl) {
+              const unifiedChatEl = document.querySelector('.chat-content[data-content="unified-chat"]');
+              if (unifiedChatEl) {
                 const handleClick = function() {
                   const unreadStore = useUnreadStore();
                   if (unreadStore) {
@@ -501,9 +520,9 @@ async function initializeChat() {
                     unreadStore.enqueueUnreadClear('global');
                     updateUnreadCountsDisplay();
                   }
-                  publicChatEl.removeEventListener('click', handleClick);
+                  unifiedChatEl.removeEventListener('click', handleClick);
                 };
-                publicChatEl.addEventListener('click', handleClick, { once: true });
+                unifiedChatEl.addEventListener('click', handleClick, { once: true });
               }
             }
           }, 200);
@@ -522,7 +541,7 @@ function adjustChatLayout() {
         chatContent.style.height = '100%';
         chatContent.style.overflow = 'hidden';
 
-        if (chatContent.dataset.content === 'public-chat') {
+        if (chatContent.dataset.content === 'unified-chat') {
             const markdownToolbar = document.getElementById('markdownToolbar');
             if (markdownToolbar && markdownToolbar.style.display !== 'none') {
                 chatContent.style.paddingTop = '60px';

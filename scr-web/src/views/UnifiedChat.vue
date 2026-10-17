@@ -2,7 +2,7 @@
   <!-- /chat 右侧面板：默认渲染主聊天室，点击二级侧边栏的聊天项时切换渲染群聊/私聊页面（不跳转路由） -->
   <GroupChat v-if="sessionStore.chatPanelType === 'group'" />
   <PrivateChat v-else-if="sessionStore.chatPanelType === 'private'" />
-  <div v-else class="chat-content" data-content="public-chat">
+  <div v-else class="chat-content" data-content="unified-chat">
     <div id="markdownToolbar" class="markdown-toolbar" v-if="showMarkdownToolbar">
       <button class="markdown-btn" @click="insertMarkdown('**', '**', '粗体文本')">粗体</button>
       <button class="markdown-btn" @click="insertMarkdown('_', '_', '斜体文本')">斜体</button>
@@ -12,13 +12,13 @@
       <button class="markdown-btn" @click="insertMarkdown('- ', '', '列表项')">列表</button>
       <button class="markdown-btn" @click="insertMarkdown('> ', '', '引用文本')">引用</button>
       <button class="markdown-btn" @click="insertMarkdown('[链接描述](', ')', '链接文本')">链接</button>
-      <button class="markdown-btn" @click="insertMarkdown('![图片无法显示时的文字](', ')', '图片URL')">图片</button>
+      <button class="markdown-btn" @click="insertMarkdown('![图片描述](', ')', '图片URL')">图片</button>
     </div>
 
     <div id="messageContainer" ref="messageContainerRef">
-      <template v-if="publicStore.publicMessages.length !== 0">
-        <PublicMessageItem
-          v-for="message in publicStore.publicMessages"
+      <template v-if="unifiedStore.unifiedMessages.length !== 0">
+        <UnifiedMessageItem
+          v-for="message in unifiedStore.unifiedMessages"
           :key="message.id"
           :message="message"
           :is-own="isOwnMessage(message)"
@@ -129,7 +129,7 @@
       @scroll-to-message="scrollToMessage"
     >
       <template #results="{ results, onClick }">
-        <PublicMessageItem
+        <UnifiedMessageItem
           v-for="result in results"
           :key="result.id"
           :message="result"
@@ -243,11 +243,11 @@ import localForage from "localforage";
 import { ref, computed, watch, nextTick, onMounted } from "vue";
 import { useRoute } from "vue-router";
 
-import PublicMessageItem from "@/components/MessageItem/PublicMessageItem.vue";
+import UnifiedMessageItem from "@/components/MessageItem/UnifiedMessageItem.vue";
 import QuotedMessagePreview from "@/components/MessageItem/QuotedMessagePreview.vue";
 import { useBaseStore } from "@/stores/baseStore";
 import { useUserStore } from "@/stores/userStore";
-import { usePublicStore } from "@/stores/publicStore";
+import { useUnifiedStore } from "@/stores/unifiedStore";
 import { useInputStore } from "@/stores/inputStore";
 import { useDraftStore } from "@/stores/draftStore";
 import { useGroupStore } from "@/stores/groupStore";
@@ -273,7 +273,7 @@ import PrivateChat from "@/views/PrivateChat.vue";
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const inputStore = useInputStore();
 const draftStore = useDraftStore();
 const { scrollAndHighlight } = useMessageHighlight();
@@ -307,7 +307,7 @@ const showImageInput = ref(false);
 const showFileInput = ref(false);
 const showVideoInput = ref(false);
 let dragCounter = 0;
-let previousPublicMessageLength = 0;
+let previousUnifiedMessageLength = 0;
 
 const currentUserId = computed(() => baseStore.currentUser?.id);
 
@@ -333,7 +333,7 @@ function isNearBottom() {
 }
 
 watch(
-  () => publicStore.publicMessages,
+  () => unifiedStore.unifiedMessages,
   (newMessages, oldMessages) => {
     // 加载更多（prepend）：首条消息 id 变化且末条不变，说明上方插入了更早的历史消息
     const isPrepend = oldMessages && oldMessages.length > 0
@@ -353,12 +353,12 @@ watch(
           wrap.scrollTop = wrap.scrollHeight - oldScrollHeight + oldScrollTop;
         }
       });
-    } else if (newMessages.length > previousPublicMessageLength) {
+    } else if (newMessages.length > previousUnifiedMessageLength) {
       if (isNearBottom()) {
         scrollToBottom();
       }
     }
-    previousPublicMessageLength = newMessages.length;
+    previousUnifiedMessageLength = newMessages.length;
   },
   { deep: true }
 );
@@ -370,6 +370,25 @@ watch(
       const mainMessageInput = document.getElementById('messageInput');
       if (mainMessageInput) {
         inputStore.mainMessageInput = mainMessageInput.innerHTML;
+        // 主聊天室草稿保存（列表项显示用，纯文本）
+        draftStore.saveDraft('main', null, mainMessageInput.textContent || '');
+      }
+      // 嵌入面板（群聊/私聊）草稿保存：直接切换页面时 DOM 即将卸载，必须在此保存
+      const panelType = sessionStore.chatPanelType;
+      if (panelType === 'private') {
+        const privateId = sessionStore.currentPrivateChatUserId;
+        const privateInput = document.getElementById('privateMessageInput');
+        if (privateId && privateInput) {
+          draftStore.saveDraft('private', privateId, privateInput.textContent || privateInput.innerHTML || '');
+          draftStore.setLastMessageToDraft('private', privateId);
+        }
+      } else if (panelType === 'group') {
+        const groupId = sessionStore.currentGroupId;
+        const groupInput = document.getElementById('groupMessageInput');
+        if (groupId && groupInput) {
+          draftStore.saveDraft('group', groupId, groupInput.textContent || groupInput.innerHTML || '');
+          draftStore.setLastMessageToDraft('group', groupId);
+        }
       }
     }
     
@@ -384,10 +403,12 @@ watch(
           if (mainMessageInput) {
             mainMessageInput.innerHTML = inputStore.mainMessageInput;
             inputStore.mainMessageInput = '';
+            // 草稿已还原到输入框，清除列表项的草稿显示
+            draftStore.clearDraft('main', null);
           }
         });
       }
-      
+
       scrollToBottom();
       setTimeout(() => {
         scrollToBottom();
@@ -398,7 +419,7 @@ watch(
       inputStore.clearQuotedMessage();
       groupStore.clearOtherGroupMessages(null);
       friendStore.clearOtherPrivateMessages(null);
-      publicStore.clearPublicMessagesExceptRecent();
+      unifiedStore.clearUnifiedMessagesExceptRecent();
       nextTick(() => {
         initializeScrollLoading(true);
       });
@@ -410,7 +431,7 @@ watch(
 
       // 切换到主聊天室时绑定一次性点击事件清除未读
       setTimeout(() => {
-        bindOneTimePublicUnreadClear();
+        bindOneTimeUnifiedUnreadClear();
       }, 100);
     }
   }
@@ -427,6 +448,8 @@ watch(
           if (mainMessageInput) {
             mainMessageInput.innerHTML = inputStore.mainMessageInput;
             inputStore.mainMessageInput = '';
+            // 草稿已还原到输入框，清除列表项的草稿显示
+            draftStore.clearDraft('main', null);
           }
         });
       }
@@ -445,7 +468,7 @@ watch(
 
       // 切换到主聊天室时绑定一次性点击事件清除未读
       setTimeout(() => {
-        bindOneTimePublicUnreadClear();
+        bindOneTimeUnifiedUnreadClear();
       }, 100);
     }
   }
@@ -462,6 +485,8 @@ onMounted(() => {
       if (mainMessageInput) {
         mainMessageInput.innerHTML = inputStore.mainMessageInput;
         inputStore.mainMessageInput = '';
+        // 草稿已还原到输入框，清除列表项的草稿显示
+        draftStore.clearDraft('main', null);
       }
     }
   });
@@ -525,16 +550,16 @@ onMounted(() => {
 
   // 初始化时绑定一次性点击事件清除主聊天室未读
   setTimeout(() => {
-    bindOneTimePublicUnreadClear();
+    bindOneTimeUnifiedUnreadClear();
   }, 300);
 });
 
-function bindOneTimePublicUnreadClear() {
+function bindOneTimeUnifiedUnreadClear() {
   const isMainChat = route.path === '/chat' || route.path === '/chat/';
   if (!isMainChat) return;
 
-  const publicChatEl = document.querySelector('.chat-content[data-content="public-chat"]');
-  if (!publicChatEl) return;
+  const unifiedChatEl = document.querySelector('.chat-content[data-content="unified-chat"]');
+  if (!unifiedChatEl) return;
 
   function onFirstClick() {
     if (unreadStore) {
@@ -542,9 +567,9 @@ function bindOneTimePublicUnreadClear() {
       unreadStore.enqueueUnreadClear('global');
       updateUnreadCountsDisplay();
     }
-    publicChatEl.removeEventListener('click', onFirstClick);
+    unifiedChatEl.removeEventListener('click', onFirstClick);
   }
-  publicChatEl.addEventListener('click', onFirstClick, { once: true });
+  unifiedChatEl.addEventListener('click', onFirstClick, { once: true });
 }
 
 const showMarkdownToolbar = ref(false);
@@ -1123,7 +1148,7 @@ async function executeSearch(keyword) {
       
       const minMatchedId = Math.min(...matchedMessages.map(m => m.id));
       
-      const storeMessages = publicStore.publicMessages;
+      const storeMessages = unifiedStore.unifiedMessages;
       if (storeMessages.length > 0) {
         const storeMinId = Math.min(...storeMessages.map(m => m.id));
         
@@ -1135,7 +1160,7 @@ async function executeSearch(keyword) {
             .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
             .sort((a, b) => a.id - b.id);
           
-          publicStore.prependPublicMessages(messagesToAdd);
+          unifiedStore.prependUnifiedMessages(messagesToAdd);
         }
       }
     }
@@ -1185,7 +1210,7 @@ function scrollToMessage(message) {
     scrollAndHighlight(messageElement);
     return;
   }
-  const allMessages = publicStore.publicMessages;
+  const allMessages = unifiedStore.unifiedMessages;
   const messageIndex = allMessages.findIndex(m => m.id === message.id);
   if (messageIndex !== -1 && messageContainerRef.value) {
     const messageElements = messageContainerRef.value.querySelectorAll('.message');

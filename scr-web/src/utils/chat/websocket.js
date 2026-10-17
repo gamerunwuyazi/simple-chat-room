@@ -15,7 +15,7 @@ import {
   useUserStore,
   useFriendStore,
   useGroupStore,
-  usePublicStore,
+  useUnifiedStore,
   useModalStore,
   useSessionStore,
   useStorageStore,
@@ -241,7 +241,7 @@ function initializeWebSocket() {
         const baseStore = useBaseStore();
         const friendStore = useFriendStore();
         const groupStore = useGroupStore();
-        const publicStore = usePublicStore();
+        const unifiedStore = useUnifiedStore();
         const storageStore = useStorageStore();
         const unreadStore = useUnreadStore();
         
@@ -340,21 +340,21 @@ function initializeWebSocket() {
                         });
                     }
                 } else {
-                    if (storageStore.fullPublicMessages !== null && storageStore.fullPublicMessages !== undefined) {
-                        const messages = storageStore.fullPublicMessages;
+                    if (storageStore.fullUnifiedMessages !== null && storageStore.fullUnifiedMessages !== undefined) {
+                        const messages = storageStore.fullUnifiedMessages;
                         const updates = storageStore.fixQuotedMessagesForWithdrawn(originalMessageId, messages);
                         updates.forEach(update => {
                             const fullIndex = messages.findIndex(m => String(m.id) === String(update.messageId));
                             if (fullIndex !== -1) {
                                 messages[fullIndex] = toRaw({ ...toRaw(messages[fullIndex]), content: update.newContent });
                             }
-                            if (publicStore.publicMessages) {
-                                const displayIndex = publicStore.publicMessages.findIndex(m => String(m.id) === String(update.messageId));
+                            if (unifiedStore.unifiedMessages) {
+                                const displayIndex = unifiedStore.unifiedMessages.findIndex(m => String(m.id) === String(update.messageId));
                                 if (displayIndex !== -1) {
-                                    publicStore.publicMessages[displayIndex] = toRaw({ ...toRaw(publicStore.publicMessages[displayIndex]), content: update.newContent });
+                                    unifiedStore.unifiedMessages[displayIndex] = toRaw({ ...toRaw(unifiedStore.unifiedMessages[displayIndex]), content: update.newContent });
                                 }
                             }
-                            publicStore.publicStored = false;
+                            unifiedStore.unifiedStored = false;
                         });
                     }
                 }
@@ -475,9 +475,9 @@ function initializeWebSocket() {
                     }
                 }
             } else {
-                const publicMessages = storageStore.fullPublicMessages;
-                if (publicMessages) {
-                    const targetMsg = publicMessages.find(m => String(m.id) === originalMessageId);
+                const unifiedMessages = storageStore.fullUnifiedMessages;
+                if (unifiedMessages) {
+                    const targetMsg = unifiedMessages.find(m => String(m.id) === originalMessageId);
                     if (targetMsg) {
                         const finalContent = recallJson || (fallbackRecallerId 
                             ? JSON.stringify({ [fallbackRecallerId]: fallbackRecallNickname })
@@ -491,16 +491,16 @@ function initializeWebSocket() {
                             avatarUrl: message.avatarUrl || targetMsg.avatarUrl
                         });
 
-                        // 直接更新publicStore中的消息
-                        if (publicStore.publicMessages) {
-                            const displayIdx = publicStore.publicMessages.findIndex(m => String(m.id) === originalMessageId);
+                        // 直接更新unifiedStore中的消息
+                        if (unifiedStore.unifiedMessages) {
+                            const displayIdx = unifiedStore.unifiedMessages.findIndex(m => String(m.id) === originalMessageId);
                             if (displayIdx !== -1) {
-                                publicStore.publicMessages[displayIdx] = toRaw({ ...toRaw(publicStore.publicMessages[displayIdx]), ...targetMsg });
+                                unifiedStore.unifiedMessages[displayIdx] = toRaw({ ...toRaw(unifiedStore.unifiedMessages[displayIdx]), ...targetMsg });
                             }
                         }
 
-                        if (storageStore.savePublicMessageToIndexedDB) {
-                            storageStore.savePublicMessageToIndexedDB(targetMsg);
+                        if (storageStore.saveUnifiedMessageToIndexedDB) {
+                            storageStore.saveUnifiedMessageToIndexedDB(targetMsg);
                         }
                     }
                 }
@@ -528,8 +528,8 @@ function initializeWebSocket() {
                 }
 
                 // 同步撤回消息内容更新到显示 stores（processUserInfoUpdateForRecallMessages 只更新了持久化层）
-                if (updateData.nickname && publicStore && publicStore.publicMessages) {
-                    publicStore.publicMessages = publicStore.publicMessages.map(msg => {
+                if (updateData.nickname && unifiedStore && unifiedStore.unifiedMessages) {
+                    unifiedStore.unifiedMessages = unifiedStore.unifiedMessages.map(msg => {
                         if (msg.isRecalled && String(msg.userId) === String(userId)) {
                             const recallTextMatch = msg.content ? msg.content.match(/^(.+)撤回了一条消息$/) : null;
                             if (recallTextMatch) {
@@ -740,8 +740,8 @@ function initializeWebSocket() {
             }
             
             // 添加102消息到store（公共消息）
-            if (publicStore && publicStore.addPublicMessage) {
-                publicStore.addPublicMessage(message);
+            if (unifiedStore && unifiedStore.addUnifiedMessage) {
+                unifiedStore.addUnifiedMessage(message);
             }
             
             // 更新对应的 minId
@@ -849,8 +849,8 @@ function initializeWebSocket() {
             }
         } else {
             // 添加公共消息到 store
-            if (publicStore && publicStore.addPublicMessage) {
-                publicStore.addPublicMessage(message);
+            if (unifiedStore && unifiedStore.addUnifiedMessage) {
+                unifiedStore.addUnifiedMessage(message);
             }
             
             // 检查@通知
@@ -859,12 +859,12 @@ function initializeWebSocket() {
                 const isCurrentUserAt = atUserIds.some(id => String(id) === String(currentUser.id));
                 // 页面聚焦且正处于主聊天室会话时，仍弹 toast，但不标记@我（避免替换标题）
                 const isPageVisibleForAt = !document.hidden && document.hasFocus();
-                const isFocusedOnPublic = isUserActiveOnChat('public', null) && isPageVisibleForAt;
+                const isFocusedOnUnified = isUserActiveOnChat('public', null) && isPageVisibleForAt;
                 if (isCurrentUserAt) {
                     toast.info('主聊天室有@你的消息');
                     // 仅在未聚焦于主聊天室会话时，设置@我标记（用于替换标题）
-                    if (!isFocusedOnPublic && unreadStore && unreadStore.setPublicHasAtMe) {
-                        unreadStore.setPublicHasAtMe();
+                    if (!isFocusedOnUnified && unreadStore && unreadStore.setUnifiedHasAtMe) {
+                        unreadStore.setUnifiedHasAtMe();
                     }
                 }
             }
@@ -876,8 +876,8 @@ function initializeWebSocket() {
             const isPageVisible = !document.hidden && document.hasFocus();
 
             // 页面级焦点（路由 + sessionStore）+ 浏览器级焦点
-            const isUserFocusedOnPublicChat = isUserActiveOnChat('public', null) && isPageVisible;
-            const shouldAddUnread = !isOwnMessage && !isUserFocusedOnPublicChat;
+            const isUserFocusedOnUnifiedChat = isUserActiveOnChat('public', null) && isPageVisible;
+            const shouldAddUnread = !isOwnMessage && !isUserFocusedOnUnifiedChat;
 
             if (shouldAddUnread) {
                 if (unreadStore && unreadStore.incrementGlobalUnread) {
@@ -897,7 +897,7 @@ function initializeWebSocket() {
     // 接收消息发送确认事件 - 根据确认事件渲染消息
     socket.on('message-sent', (data) => {
         const groupStore = useGroupStore();
-        const publicStore = usePublicStore();
+        const unifiedStore = useUnifiedStore();
         const storageStore = useStorageStore();
         const draftStore = useDraftStore();
 
@@ -980,22 +980,22 @@ function initializeWebSocket() {
                             });
                         }
                     } else {
-                        // 公共消息 - 从 fullPublicMessages 中查找
-                        if (storageStore.fullPublicMessages !== null && storageStore.fullPublicMessages !== undefined) {
-                            const messages = storageStore.fullPublicMessages;
+                        // 公共消息 - 从 fullUnifiedMessages 中查找
+                        if (storageStore.fullUnifiedMessages !== null && storageStore.fullUnifiedMessages !== undefined) {
+                            const messages = storageStore.fullUnifiedMessages;
                             const updates = storageStore.fixQuotedMessagesForWithdrawn(originalMessageId, messages);
                             updates.forEach(update => {
                                 const fullIndex = messages.findIndex(m => String(m.id) === String(update.messageId));
                                 if (fullIndex !== -1) {
                                     messages[fullIndex] = toRaw({ ...toRaw(messages[fullIndex]), content: update.newContent });
                                 }
-                                if (publicStore.publicMessages) {
-                                    const displayIndex = publicStore.publicMessages.findIndex(m => String(m.id) === String(update.messageId));
+                                if (unifiedStore.unifiedMessages) {
+                                    const displayIndex = unifiedStore.unifiedMessages.findIndex(m => String(m.id) === String(update.messageId));
                                     if (displayIndex !== -1) {
-                                        publicStore.publicMessages[displayIndex] = toRaw({ ...toRaw(publicStore.publicMessages[displayIndex]), content: update.newContent });
+                                        unifiedStore.unifiedMessages[displayIndex] = toRaw({ ...toRaw(unifiedStore.unifiedMessages[displayIndex]), content: update.newContent });
                                     }
                                 }
-                                publicStore.publicStored = false;
+                                unifiedStore.unifiedStored = false;
                             });
                         }
                     }
@@ -1070,9 +1070,9 @@ function initializeWebSocket() {
                     }
                 } else {
                     // 公共消息撤回
-                    const publicMessages = storageStore.fullPublicMessages;
-                    if (publicMessages) {
-                        const targetMsg = publicMessages.find(m => String(m.id) === originalMessageId);
+                    const unifiedMessages = storageStore.fullUnifiedMessages;
+                    if (unifiedMessages) {
+                        const targetMsg = unifiedMessages.find(m => String(m.id) === originalMessageId);
                         if (targetMsg) {
                             const finalContent = recallJson || (fallbackRecallerId 
                                 ? JSON.stringify({ [fallbackRecallerId]: fallbackRecallNickname })
@@ -1087,17 +1087,17 @@ function initializeWebSocket() {
                                 avatarUrl: confirmedMessage.avatarUrl || targetMsg.avatarUrl
                             });
 
-                            // 触发UI更新 - 直接更新publicStore中的消息
-                            if (publicStore.publicMessages) {
-                                const displayIndex = publicStore.publicMessages.findIndex(m => String(m.id) === originalMessageId);
+                            // 触发UI更新 - 直接更新unifiedStore中的消息
+                            if (unifiedStore.unifiedMessages) {
+                                const displayIndex = unifiedStore.unifiedMessages.findIndex(m => String(m.id) === originalMessageId);
                                 if (displayIndex !== -1) {
-                                    publicStore.publicMessages[displayIndex] = toRaw({ ...toRaw(publicStore.publicMessages[displayIndex]), ...targetMsg });
+                                    unifiedStore.unifiedMessages[displayIndex] = toRaw({ ...toRaw(unifiedStore.unifiedMessages[displayIndex]), ...targetMsg });
                                 }
                             }
 
                             // 持久化到IndexedDB（更新现有记录，保持JSON格式）
-                            if (storageStore.savePublicMessageToIndexedDB) {
-                                storageStore.savePublicMessageToIndexedDB(targetMsg);
+                            if (storageStore.saveUnifiedMessageToIndexedDB) {
+                                storageStore.saveUnifiedMessageToIndexedDB(targetMsg);
                             }
                         }
                     }
@@ -1154,8 +1154,8 @@ function initializeWebSocket() {
             } else {
                 // 公共消息
                 // 添加确认后的消息到 store
-                if (publicStore && publicStore.addPublicMessage) {
-                    publicStore.addPublicMessage(confirmedMessage);
+                if (unifiedStore && unifiedStore.addUnifiedMessage) {
+                    unifiedStore.addUnifiedMessage(confirmedMessage);
                 }
 
                 // 更新公共聊天最后消息时间到 IndexedDB
@@ -1797,7 +1797,7 @@ function initializeWebSocket() {
     // 统一加载消息事件（替代原来的三个事件）
     socket.on('messages-loaded', async (data) => {
         const sessionStore = useSessionStore();
-        const publicStore = usePublicStore();
+        const unifiedStore = useUnifiedStore();
         const groupStore = useGroupStore();
         const baseStore = useBaseStore();
         const friendStore = useFriendStore();
@@ -1811,18 +1811,18 @@ function initializeWebSocket() {
         
         if (data.type === 'global') {
             // 全局聊天室消息 - 完全复刻 chat-history 事件
-            if (publicStore && data.messages) {
-                if (data.loadMore && publicStore.prependPublicMessages) {
-                    publicStore.prependPublicMessages(data.messages);
-                } else if (publicStore.setPublicMessages) {
-                    publicStore.setPublicMessages(data.messages);
+            if (unifiedStore && data.messages) {
+                if (data.loadMore && unifiedStore.prependUnifiedMessages) {
+                    unifiedStore.prependUnifiedMessages(data.messages);
+                } else if (unifiedStore.setUnifiedMessages) {
+                    unifiedStore.setUnifiedMessages(data.messages);
                 }
                 
                 // 检查是否加载更多时返回了空数组或消息数少于20条，标记为已全部加载
                 if (data.loadMore) {
                     const isAllLoaded = !data.messages || data.messages.length < 20 || data.messages.length === 0;
-                    if (isAllLoaded && publicStore.setPublicAllLoaded) {
-                        publicStore.setPublicAllLoaded(true);
+                    if (isAllLoaded && unifiedStore.setUnifiedAllLoaded) {
+                        unifiedStore.setUnifiedAllLoaded(true);
                     }
                     resetLoadingState('public');
                 }
@@ -1968,7 +1968,7 @@ function initializeWebSocket() {
     // 聊天历史记录事件
     socket.on('chat-history', async (data) => {
         const sessionStore = useSessionStore();
-        const publicStore = usePublicStore();
+        const unifiedStore = useUnifiedStore();
         const groupStore = useGroupStore();
         const baseStore = useBaseStore();
         const friendStore = useFriendStore();
@@ -1980,11 +1980,11 @@ function initializeWebSocket() {
             sessionStore.setCurrentSessionToken(data.sessionToken);
         }
 
-        if (publicStore && data.messages) {
-            if (data.loadMore && publicStore.prependPublicMessages) {
-                publicStore.prependPublicMessages(data.messages);
-            } else if (publicStore.setPublicMessages) {
-                publicStore.setPublicMessages(data.messages);
+        if (unifiedStore && data.messages) {
+            if (data.loadMore && unifiedStore.prependUnifiedMessages) {
+                unifiedStore.prependUnifiedMessages(data.messages);
+            } else if (unifiedStore.setUnifiedMessages) {
+                unifiedStore.setUnifiedMessages(data.messages);
             }
         }
 

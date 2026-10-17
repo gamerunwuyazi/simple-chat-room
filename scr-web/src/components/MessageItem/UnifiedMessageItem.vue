@@ -116,7 +116,7 @@ import { marked } from 'marked';
 import { computed, ref, onMounted } from 'vue';
 
 import { useBaseStore } from '@/stores/baseStore';
-import { usePublicStore } from '@/stores/publicStore';
+import { useUnifiedStore } from '@/stores/unifiedStore';
 import { useModalStore } from '@/stores/modalStore';
 import { useInputStore } from '@/stores/inputStore';
 import { openUserAvatarPopup } from '@/stores/index.js';
@@ -142,7 +142,7 @@ const props = defineProps({
 });
 
 const baseStore = useBaseStore();
-const publicStore = usePublicStore();
+const unifiedStore = useUnifiedStore();
 const modalStore = useModalStore();
 const inputStore = useInputStore();
 
@@ -846,7 +846,7 @@ function handleContextMenu(event) {
   deleteMenuItem.style.whiteSpace = 'nowrap';
   
   deleteMenuItem.addEventListener('click', () => {
-    publicStore.deletePublicMessage(messageId);
+    unifiedStore.deleteUnifiedMessage(messageId);
     hideContextMenu();
   });
   

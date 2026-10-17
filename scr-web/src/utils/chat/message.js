@@ -517,25 +517,25 @@ export function sendPrivateMessage() {
 }
 
 /**
- * 格式化消息时间戳：时分秒前按需拼接日期前缀（与当前日期比较）
- * 同日不显示日期；同月只显示日；同年显示月日；跨年显示年月日
+ * 格式化消息时间戳：日期前缀按需拼接（与当前日期比较），时间精度只到分钟
+ * 今天不显示日期；一周内显示周几；一年内显示月日；跨年显示年月日
  * @param {Date} date 消息时间
- * @returns {string} 如 "2025年9月1日 14:30:25" / "9月20日 14:30:25" / "23日 14:30:25" / "14:30:25"
+ * @returns {string} 如 "周三 14:30" / "9月20日 14:30" / "2025年9月1日 14:30" / "14:30"
  */
 export function formatMessageTime(date) {
-  const time = date.toLocaleTimeString();
+  // 精度只到分钟，不显示秒
+  const time = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   const now = new Date();
-  const sameYear = date.getFullYear() === now.getFullYear();
-  const sameMonth = sameYear && date.getMonth() === now.getMonth();
-  const sameDay = sameMonth && date.getDate() === now.getDate();
-  if (sameDay) return time;
-  let prefix;
-  if (sameMonth) {
-    prefix = `${date.getDate()}日`;
-  } else if (sameYear) {
-    prefix = `${date.getMonth() + 1}月${date.getDate()}日`;
-  } else {
-    prefix = `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  // 按自然日计算相差天数（今天为 0）
+  const dayDiff = Math.round((startOfDay(now) - startOfDay(date)) / 86400000);
+  if (dayDiff <= 0) return time;
+  if (dayDiff < 7) {
+    // 一周内：显示周几
+    return `周${'日一二三四五六'[date.getDay()]} ${time}`;
   }
-  return `${prefix} ${time}`;
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+  }
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
 }

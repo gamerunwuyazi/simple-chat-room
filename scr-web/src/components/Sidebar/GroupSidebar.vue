@@ -6,6 +6,7 @@ import { usePagedList, searchSorter } from '@/composables/usePagedList';
 import { useBaseStore } from '@/stores/baseStore';
 import { useGroupStore } from '@/stores/groupStore';
 import { useFriendStore } from '@/stores/friendStore';
+import { useSessionStore } from '@/stores/sessionStore';
 import { useUnreadStore } from '@/stores/unreadStore';
 import { useDraftStore } from '@/stores/draftStore';
 import { useModalStore } from '@/stores/modalStore';
@@ -17,6 +18,7 @@ import { setGroupDisturb } from '@/api/group.js';
 const baseStore = useBaseStore();
 const groupStore = useGroupStore();
 const friendStore = useFriendStore();
+const sessionStore = useSessionStore();
 const unreadStore = useUnreadStore();
 const draftStore = useDraftStore();
 const modalStore = useModalStore();
@@ -279,10 +281,10 @@ function handleGroupAvatarError(event, group) {
                 <li v-else-if="groupStore.groupsList.length === 0" class="empty-item">
                     <span class="empty-text">暂无群组</span>
                 </li>
-                <li v-else v-for="group in pagedGroupsList" :key="group.id" 
-                    :data-group-id="group.id" 
+                <li v-else v-for="group in pagedGroupsList" :key="group.id"
+                    :data-group-id="group.id"
                     :data-group-name="getGroupDisplayName(group)"
-                    :class="{ 'deleted-item': group.deleted_at }"
+                    :class="{ 'deleted-item': group.deleted_at, active: String(sessionStore.currentGroupId) === String(group.id) }"
                     @click="handleGroupClick(group)"
                     @contextmenu.prevent="handleGroupRightClick($event, group)">
                     <span v-if="getGroupAvatarUrl(group) && !isSvgAvatar(getGroupAvatarUrl(group))" class="group-avatar">
@@ -324,6 +326,20 @@ function handleGroupAvatarError(event, group) {
 </template>
 
 <style scoped>
+/* 当前打开的会话：与消息页面（UnifiedSidebar）一致的深色高亮；
+   全局 index.css 有 #groupList li.active { #3498db 蓝色 }，用同 ID 选择器覆盖 */
+.user-list li.active,
+#groupList li.active {
+    background-color: #dbe4ef;
+    color: inherit;
+}
+
+#groupList li.active:hover {
+    background-color: #dbe4ef;
+}
+
+/* 深色模式 active 规则统一收归 index.css 全局（避免 scoped :global() 编译异常导致选择器丢失） */
+
 .context-menu {
     position: fixed;
     z-index: 10000;

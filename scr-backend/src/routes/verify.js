@@ -7,6 +7,7 @@ import {
   createRedisSessionStore
 } from 'human-verify/backend';
 import { redisClient } from '../models/database.js';
+import { verifyConfig } from '../config/index.js';
 
 // 集群环境：把验证会话存储切换到 Redis，确保多个 worker 进程共享会话
 configureSessionStore(
@@ -21,7 +22,11 @@ export function setupVerifyRoutes(app) {
   // 1. 创建验证会话（需要前端上报视口尺寸，后端按视口生成全屏透明挑战图）
   app.post('/api/verify/challenge', async (req, res) => {
     try {
-      const session = await createSession({ viewport: req.body?.viewport });
+      // workers：生图 worker 线程数，由 HUMAN_VERIFY_WORKERS 配置（见 config/index.js）
+      const session = await createSession({
+        viewport: req.body?.viewport,
+        workers: verifyConfig.workers
+      });
       res.json(session);
     } catch (err) {
       console.error('创建验证会话失败:', err.message);
