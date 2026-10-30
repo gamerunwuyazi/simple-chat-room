@@ -44,6 +44,8 @@ const activeMenuItem = computed(() => {
     return 'group-chat';
   } else if (path.startsWith('/chat/private')) {
     return 'private-chat';
+  } else if (path.startsWith('/chat/favorites')) {
+    return 'favorites';
   } else if (path.startsWith('/chat/settings')) {
     return 'user-settings';
   } else {
@@ -163,6 +165,8 @@ async function handleMenuClick(section) {
     path = '/chat/group';
   } else if (section === 'private-chat') {
     path = '/chat/private';
+  } else if (section === 'favorites') {
+    path = '/chat/favorites';
   } else if (section === 'user-settings') {
     path = '/chat/settings';
   }
@@ -240,6 +244,15 @@ function saveCurrentPanelDraft() {
                 <div class="chat-avatar"><i class="fas fa-user" style="font-size: 22px;"></i></div>
                 <span class="menu-label">私聊</span>
                 <div v-if="friendRequestUnreadCount > 0" class="unread-count">{{ friendRequestUnreadCount > 99 ? '99+' : friendRequestUnreadCount }}</div>
+            </li>
+        </ul>
+    </div>
+
+    <div class="menu-section">
+        <ul class="menu-list">
+            <li :class="['menu-item', { active: activeMenuItem === 'favorites' }]" data-section="favorites" @click="handleMenuClick('favorites')">
+                <div class="chat-avatar"><i class="fas fa-box"></i></div>
+                <span class="menu-label">收藏</span>
             </li>
         </ul>
     </div>

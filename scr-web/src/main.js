@@ -66,6 +66,14 @@ const router = createRouter({
                     }
                 },
                 {
+                    path: 'favorites',
+                    name: 'favorites',
+                    components: {
+                        default: () => import('./views/FavoritesView.vue'),
+                        sidebar: () => import('./components/Sidebar/FavoritesSidebar.vue')
+                    }
+                },
+                {
                     path: 'settings',
                     name: 'settings',
                     components: {

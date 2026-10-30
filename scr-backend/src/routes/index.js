@@ -6,6 +6,7 @@ import { setupRoutes as setupGroupRoutes } from './group.js';
 import { setupRoutes as setupMessageRoutes } from './message.js';
 import { setupRoutes as setupFileRoutes } from './file.js';
 import { setupVerifyRoutes } from './verify.js';
+import { setupRoutes as setupFavoriteRoutes } from './favorite.js';
 
 export function setupAllRoutes(app, io, broadcastProducer) {
   setupHealthRoutes(app, io);
@@ -17,4 +18,5 @@ export function setupAllRoutes(app, io, broadcastProducer) {
   setupUserRoutes(app, io);
   setupMessageRoutes(app, io);
   setupFileRoutes(app, io);
+  setupFavoriteRoutes(app, io);
 }

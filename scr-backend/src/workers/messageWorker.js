@@ -23,10 +23,13 @@ function getDb() {
       // 每个 worker × 连接数需计入总连接预算；worker 池默认 1，配合主池 150，
       // 远低于 MySQL max_connections(500)。可按需用 WORKER_DB_CONNECTION_LIMIT 调整。
       connectionLimit: parseInt(process.env.WORKER_DB_CONNECTION_LIMIT || '8', 10),
-      // 空闲连接管理：mysql2 仅在 maxIdle < connectionLimit 时才启动空闲回收器，
-      // 空闲 3 小时后由客户端主动断开（早于 MySQL wait_timeout 默认 8h），防止连接腐化
-      maxIdle: 10,
-      idleTimeout: 3 * 60 * 60 * 1000,
+      // 空闲连接管理：必须让 maxIdle < connectionLimit，mysql2 才会启动空闲回收器
+      // （base/pool.js 的条件）。此前 maxIdle=10 ≥ connectionLimit，回收器从不启动，
+      // idleTimeout 形同虚设——连接会一直存活到被 MySQL 端 wait_timeout 静默关闭，
+      // 之后首次查询才报 PROTOCOL_CONNECTION_LOST，表现为"连接超时+重连数据库"。
+      // 现由客户端主动在空闲 10 分钟后 clean close，远早于 MySQL wait_timeout（默认 8h）。
+      maxIdle: 2,
+      idleTimeout: parseInt(process.env.WORKER_DB_IDLE_TIMEOUT || String(10 * 60 * 1000), 10),
       // 连接超时调快（默认 10s）：MySQL 不可达时新连接 3s 即失败，
       // 配合任务层重建重试（约 3s+3s），尽快回退主线程，避免 HTTP 被拖到超时
       connectTimeout: 3000,
@@ -37,41 +40,21 @@ function getDb() {
   return dbPromise;
 }
 
-const CONNECTION_PROBE_TIMEOUT_MS = 40;
-
-function withinTimeout(promise, timeout, message) {
-  let timer;
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), timeout);
-      if (timer.unref) timer.unref();
-    })
-  ]).finally(() => clearTimeout(timer));
-}
-
-// 每项任务先取得一条连接并在同一条连接上完成 40ms 健康探测。
-// getConnection 不限时：池空闲连接被 idleTimeout 回收后池为空，mysql2 会自动新建连接
-// （新连接不存在僵尸风险，建连耗时由 connectTimeout 兜底）；40ms 探测只针对池中取出的旧连接，
-// 用于识别已被服务端静默关闭的僵尸连接。
-async function acquireHealthyConnection() {
-  let lastErr = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const conn = await getDb().getConnection();
-    try {
-      await withinTimeout(
-        conn.query({ sql: 'SELECT 1', timeout: CONNECTION_PROBE_TIMEOUT_MS }),
-        CONNECTION_PROBE_TIMEOUT_MS,
-        'MySQL 连接健康探测超时'
-      );
-      return conn;
-    } catch (err) {
-      conn.destroy(); // 销毁坏连接（自动移出池），池空后下次 getConnection 自动新建
-      lastErr = err;
-    }
-  }
-  throw lastErr;
-}
+// 说明：这里**没有**"每任务先 SELECT 1 探活"的环节。
+//
+// 曾经的实现是每个任务先用 40ms 上限跑一次 SELECT 1，失败就 conn.destroy()，
+// 两次都失败再 resetDb() 整池重建。实测这是故障主因：
+//   1) SELECT 1 在正常连接上也要一次完整往返，负载稍高就超过 40ms，
+//      于是把"只是慢了一点"的好连接 destroy 掉；
+//   2) 整池重建 = 后续请求全部要重新 TCP+鉴权，即用户感知的
+//      "请求大半时间被连接超时+重连数据库占了"；
+//   3) 主线程再把失败当成 worker 不可信，terminate 掉整个 isolate 重建，
+//      重建期间槽位不可用，请求全部回退主线程。
+//
+// mysql2 连接池本身就能处理坏连接：对已被服务端关闭的连接发起查询会立刻抛
+// PROTOCOL_CONNECTION_LOST / ECONNRESET，池会自动把该连接移除并按需新建。
+// 所以坏连接的代价只是"一次失败的真实查询 + 一次按需建连"，
+// 由下方 runTask 的重试路径承担，不需要预探测。
 
 function getRedis() {
   if (!redisPromise) {
@@ -560,11 +543,13 @@ async function runGetOfflineMessages({ userId, publicAndGroupMinId, privateMinId
   };
 }
 
-// 任务分发：探测通过的连接仅供当前任务使用，完成后无条件归还池。
+// 任务分发：从池中取一条连接执行业务查询，完成后无条件归还池。
+// onReady 在拿到连接后立即回调——此时主线程的探测计时器即可清零，
+// 不需要（也不再有）额外的 SELECT 1 探活往返。
 async function runTask(task, onReady) {
-  const db = await acquireHealthyConnection();
-  onReady();
+  const db = await getDb().getConnection();
   try {
+    onReady();
     switch (task.type) {
       case 'getGlobalMessages':
         return await runGetGlobalMessages({ ...task, db });
@@ -580,10 +565,11 @@ async function runTask(task, onReady) {
   }
 }
 
-// 连接级错误：连接已被服务端关闭（wait_timeout/重启/网络中断）或健康探测超时。
+// 连接级错误：连接已被服务端关闭（wait_timeout/重启/网络中断）或建连失败。
+// 这类错误在 worker 内自愈（resetDb + 重试），不外溢成任务失败。
 function isConnectionError(err) {
   const text = `${err?.code || ''} ${err?.message || ''}`;
-  return /健康探测超时|closed state|PROTOCOL_CONNECTION_LOST|PROTOCOL_SEQUENCE_TIMEOUT|ECONNRESET|EPIPE|ETIMEDOUT|ER_SERVER_LOST/i.test(text);
+  return /closed state|PROTOCOL_CONNECTION_LOST|PROTOCOL_SEQUENCE_TIMEOUT|ECONNRESET|EPIPE|ETIMEDOUT|ER_SERVER_LOST|ECONNREFUSED|ENOTFOUND|ER_ACCESS|connect ETIMEDOUT|Connection lost/i.test(text);
 }
 
 function resetDb() {
@@ -598,17 +584,19 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Worker 只有完成一次真实 MySQL 健康探测后才会被主线程纳入调度。
+// Worker 只有成功拿到过一条 MySQL 连接后，才会被主线程纳入调度。
+// 这里只验证"能连上"，不做 SELECT 1 探活——拿不到连接时 MySQL 本就不可用，
+// 此时让 worker 保持 unavailable，请求会立刻回退主线程，比派给它再失败更快。
 async function announceWhenHealthy() {
   while (true) {
     try {
-      const db = await acquireHealthyConnection();
+      const db = await getDb().getConnection();
       db.release();
       parentPort.postMessage({ workerReady: true });
       return;
     } catch {
       resetDb();
-      await sleep(100);
+      await sleep(1000);
     }
   }
 }
@@ -628,13 +616,18 @@ parentPort.on('message', async (task) => {
     try {
       result = await runTask(task, onReady);
     } catch (err) {
-      if (!isConnectionError(err) || readySent) throw err;
-      // 首次连接探测失败：丢弃旧池后重试一次；若仍未 ready，主线程会在 45ms 熔断此 worker。
+      // 连接级错误在 worker 内自愈：丢弃旧池后重试一次。
+      // 已 ready 说明连接当时是好的，是查询中途连接才断的，同样值得重试一次。
+      if (!isConnectionError(err)) throw err;
+      console.warn('⚠️ 消息 Worker 连接异常，重建连接池后重试:', err.message);
       resetDb();
       result = await runTask(task, onReady);
     }
     parentPort.postMessage({ id: task.id, ok: true, result });
   } catch (err) {
+    // 走到这里说明自愈重试也失败了（通常是 MySQL 真的不可达）。
+    // 不再因此 terminate worker——它会带着全新的连接池继续服务下一个任务。
+    console.error('❌ 消息 Worker 任务失败:', err.message);
     parentPort.postMessage({
       id: task.id,
       ok: false,

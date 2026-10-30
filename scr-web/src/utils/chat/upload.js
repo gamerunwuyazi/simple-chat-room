@@ -14,6 +14,7 @@ import { loadMessages } from './websocket.js';
 import { refreshTokenWithQueue } from './tokenManager.js';
 import { logout } from './ui.js';
 import { uploadAvatar } from '@/api/upload.js';
+import { useInputStore } from '@/stores/inputStore.js';
 
 let isLoadingMoreMessages = {
   public: false,
@@ -46,20 +47,25 @@ function showSuccess(message) {
 }
 
 function uploadWithProgress(url, formData, baseStore, onSuccess, onError) {
+  // 进度写入 inputStore（三个聊天页的进度条读的就是它）。
+  // 历史上这里误写成 baseStore.uploadProgress，而 baseStore 并没有该字段，
+  // 写入落到非响应式属性上，页面永远显示 0%——进度条因此从不出现。
+  const inputStore = useInputStore();
+  const setProgress = (p) => { inputStore.uploadProgress = p; };
+  const resetProgress = () => { inputStore.showUploadProgress = false; inputStore.uploadProgress = 0; };
+  inputStore.showUploadProgress = true;
+  inputStore.uploadProgress = 0;
+
   const xhr = new XMLHttpRequest();
 
   xhr.upload.addEventListener('progress', (e) => {
-    if (e.lengthComputable && baseStore) {
-      const percentComplete = Math.round((e.loaded / e.total) * 100);
-      baseStore.uploadProgress = percentComplete;
+    if (e.lengthComputable) {
+      setProgress(Math.round((e.loaded / e.total) * 100));
     }
   });
 
   xhr.addEventListener('load', async () => {
-    if (baseStore) {
-      baseStore.showUploadProgress = false;
-      baseStore.uploadProgress = 0;
-    }
+    resetProgress();
 
     if (xhr.status === 413) {
       onError('文件过大，请选择小于5MB的文件');
@@ -74,17 +80,13 @@ function uploadWithProgress(url, formData, baseStore, onSuccess, onError) {
           if (newToken && baseStore?.currentUser) {
             const retryXhr = new XMLHttpRequest();
             retryXhr.upload.addEventListener('progress', (e) => {
-              if (e.lengthComputable && baseStore) {
-                const percentComplete = Math.round((e.loaded / e.total) * 100);
-                baseStore.uploadProgress = percentComplete;
+              if (e.lengthComputable) {
+                setProgress(Math.round((e.loaded / e.total) * 100));
               }
             });
 
             retryXhr.addEventListener('load', () => {
-              if (baseStore) {
-                baseStore.showUploadProgress = false;
-                baseStore.uploadProgress = 0;
-              }
+              resetProgress();
 
               try {
                 const data = JSON.parse(retryXhr.responseText);
@@ -95,16 +97,16 @@ function uploadWithProgress(url, formData, baseStore, onSuccess, onError) {
             });
 
             retryXhr.addEventListener('error', () => {
-              if (baseStore) {
-                baseStore.showUploadProgress = false;
-                baseStore.uploadProgress = 0;
-              }
+              resetProgress();
               onError('上传失败，请稍后重试');
             });
 
             retryXhr.open('POST', url);
             retryXhr.setRequestHeader('user-id', baseStore.currentUser.id);
             retryXhr.setRequestHeader('session-token', newToken);
+            // 重试前重新显示进度条（上面的 load 已把它收起）
+            inputStore.showUploadProgress = true;
+            inputStore.uploadProgress = 0;
             retryXhr.send(formData);
           } else {
             logout();
@@ -132,18 +134,12 @@ function uploadWithProgress(url, formData, baseStore, onSuccess, onError) {
   });
 
   xhr.addEventListener('error', () => {
-    if (baseStore) {
-      baseStore.showUploadProgress = false;
-      baseStore.uploadProgress = 0;
-    }
+    resetProgress();
     onError('网络连接失败，请检查网络后重试');
   });
 
   xhr.addEventListener('abort', () => {
-    if (baseStore) {
-      baseStore.showUploadProgress = false;
-      baseStore.uploadProgress = 0;
-    }
+    resetProgress();
     onError('上传已取消');
   });
 
@@ -158,6 +154,7 @@ function uploadWithProgress(url, formData, baseStore, onSuccess, onError) {
 function uploadImage(file) {
   const sessionStore = useSessionStore();
   const baseStore = useBaseStore();
+  const inputStore = useInputStore();
   
   const chat = String(sessionStore?.currentActiveChat || 'main');
   
@@ -194,10 +191,8 @@ function uploadImage(file) {
         formData.append('groupId', groupId);
       }
 
-      if (baseStore) {
-        baseStore.showUploadProgress = true;
-        baseStore.uploadProgress = 0;
-      }
+      inputStore.showUploadProgress = true;
+      inputStore.uploadProgress = 0;
 
       uploadWithProgress(
         `${SERVER_URL}/api/upload`,
@@ -222,10 +217,8 @@ function uploadImage(file) {
         formData.append('groupId', groupId);
       }
 
-      if (baseStore) {
-        baseStore.showUploadProgress = true;
-        baseStore.uploadProgress = 0;
-      }
+      inputStore.showUploadProgress = true;
+      inputStore.uploadProgress = 0;
 
       uploadWithProgress(
         `${SERVER_URL}/api/upload`,
@@ -245,6 +238,7 @@ function uploadImage(file) {
 function uploadFile(file) {
   const sessionStore = useSessionStore();
   const baseStore = useBaseStore();
+  const inputStore = useInputStore();
   
   const chat = String(sessionStore?.currentActiveChat || 'main');
   
@@ -272,10 +266,8 @@ function uploadFile(file) {
     formData.append('groupId', groupId);
   }
 
-  if (baseStore) {
-    baseStore.showUploadProgress = true;
-    baseStore.uploadProgress = 0;
-  }
+  inputStore.showUploadProgress = true;
+  inputStore.uploadProgress = 0;
 
   uploadWithProgress(
     `${SERVER_URL}/api/upload`,
@@ -290,6 +282,7 @@ function uploadPrivateImage(file) {
   const sessionStore = useSessionStore();
   const friendStore = useFriendStore();
   const baseStore = useBaseStore();
+  const inputStore = useInputStore();
   
   const user = baseStore.currentUser;
   const token = baseStore.currentSessionToken;
@@ -311,10 +304,8 @@ function uploadPrivateImage(file) {
   formData.append('userId', user.id);
   formData.append('privateChat', true);
 
-  if (baseStore) {
-    baseStore.showUploadProgress = true;
-    baseStore.uploadProgress = 0;
-  }
+  inputStore.showUploadProgress = true;
+  inputStore.uploadProgress = 0;
 
   uploadWithProgress(
     `${SERVER_URL}/api/upload`,
@@ -342,6 +333,7 @@ function uploadPrivateFile(file) {
   const sessionStore = useSessionStore();
   const friendStore = useFriendStore();
   const baseStore = useBaseStore();
+  const inputStore = useInputStore();
   
   const user = baseStore.currentUser;
   const token = baseStore.currentSessionToken;
@@ -363,10 +355,8 @@ function uploadPrivateFile(file) {
   formData.append('userId', user.id);
   formData.append('privateChat', true);
 
-  if (baseStore) {
-    baseStore.showUploadProgress = true;
-    baseStore.uploadProgress = 0;
-  }
+  inputStore.showUploadProgress = true;
+  inputStore.uploadProgress = 0;
 
   uploadWithProgress(
     `${SERVER_URL}/api/upload`,
@@ -393,6 +383,7 @@ function uploadPrivateFile(file) {
 function uploadVideo(file) {
   const sessionStore = useSessionStore();
   const baseStore = useBaseStore();
+  const inputStore = useInputStore();
   
   const chat = String(sessionStore?.currentActiveChat || 'main');
   
@@ -420,10 +411,8 @@ function uploadVideo(file) {
     formData.append('groupId', groupId);
   }
 
-  if (baseStore) {
-    baseStore.showUploadProgress = true;
-    baseStore.uploadProgress = 0;
-  }
+  inputStore.showUploadProgress = true;
+  inputStore.uploadProgress = 0;
 
   uploadWithProgress(
     `${SERVER_URL}/api/upload`,
@@ -438,6 +427,7 @@ function uploadPrivateVideo(file) {
   const sessionStore = useSessionStore();
   const friendStore = useFriendStore();
   const baseStore = useBaseStore();
+  const inputStore = useInputStore();
   
   const user = baseStore.currentUser;
   const token = baseStore.currentSessionToken;
@@ -459,10 +449,8 @@ function uploadPrivateVideo(file) {
   formData.append('userId', user.id);
   formData.append('privateChat', true);
 
-  if (baseStore) {
-    baseStore.showUploadProgress = true;
-    baseStore.uploadProgress = 0;
-  }
+  inputStore.showUploadProgress = true;
+  inputStore.uploadProgress = 0;
 
   uploadWithProgress(
     `${SERVER_URL}/api/upload`,

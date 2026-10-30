@@ -27,12 +27,13 @@ function getWorkerPath() {
 // 实测单个 worker 常驻 RSS 约 30~50MB（线程级 V8 堆 + 连接缓冲）。
 // 低流量（如 DAU 数十）场景 1 个即可；高并发再调大，避免用内存换那点并发。
 const POOL_SIZE = Math.max(1, parseInt(process.env.MESSAGE_WORKER_POOL_SIZE || '1', 10));
-// 主线程侧探测超时：只作为「任务迟迟不返回」的软性兜底，绝不用于熔断 worker。
-// 绝不能用几十毫秒——worker 侧自身健康探测存在「探测失败 → destroy → 重连」重试，
-// 最坏耗时本就可能超过 45ms；主线程若抢先在 45ms 熔断并 terminate 整个 isolate，
-// 就会在每次探测抖动时反复销毁/重建 V8 isolate（原生内存棘轮式抬升）。
+// 就绪超时：worker 从收到任务到回报「已拿到连接」的宽限时间。
+// 这不是连接探活——worker 侧已移除每任务的 SELECT 1 预探测（见 messageWorker.js），
+// 这里只是防止任务投递后 worker 毫无响应的兜底。取值只需覆盖最坏情况：
+//   池空时新建连接（connectTimeout 3s）+ 建连排队等待。
+// 5s 足够，且绝不用于 terminate worker（终止只保留给真正的崩溃/退出）。
 const CONNECTION_PROBE_TIMEOUT_MS = 5000;
-// 探测通过后，业务查询仍沿用独立的总任务超时。
+// 业务查询的总超时（与就绪超时相互独立）。
 const TASK_TIMEOUT_MS = 30000;
 
 const workerData = {
@@ -99,12 +100,13 @@ function createWorker(index) {
     if (msg.ok) {
       p.resolve(msg.result);
     } else {
-      const error = new Error(msg.error?.message || '消息拉取任务失败');
-      // 探测阶段失败或业务查询发生连接级错误时，当前 worker 的连接池均不可信。
-      if (!p.ready || msg.connectionError) {
-        replaceWorker(worker, `MySQL 连接异常: ${error.message}`);
-      }
-      p.reject(error);
+      // 任务失败（含连接级错误）**不替换 worker**：
+      // worker 内部已经 resetDb + 重试过一次，仍失败说明是 MySQL 侧真的不可用，
+      // 此时 terminate isolate 只会让槽位在重建期间持续拒绝请求
+      // （"消息 Worker 正在预热或重建"）并造成原生内存 churn。
+      // worker 会带着全新的连接池继续服务后续任务，只在真正崩溃/退出时才替换
+      // （见下方 error / exit 处理器）。
+      p.reject(new Error(msg.error?.message || '消息拉取任务失败'));
     }
   });
   worker.on('error', (err) => {
@@ -148,12 +150,12 @@ export function runMessageTask(type, params) {
     pending.set(id, pendingTask);
     pendingTask.probeTimer = setTimeout(() => {
       if (!pending.has(id) || pendingTask.ready) return;
-      // 探测阶段只是「还没 ready」，不能据此判定连接不可信：
-      // 果断拒绝本次任务让调用方回退主线程即可，但保留 worker 存活，
+      // 只是「还没拿到连接」，不能据此判定 worker 不可信：
+      // 拒绝本次任务让调用方回退主线程即可，但保留 worker 存活，
       // 避免 terminate/重建 isolate 造成的原生内存 churn。
       pending.delete(id);
       clearTimeout(pendingTask.taskTimer);
-      reject(new Error('消息 Worker 连接健康探测超时'));
+      reject(new Error('消息 Worker 就绪超时'));
     }, CONNECTION_PROBE_TIMEOUT_MS);
     pendingTask.taskTimer = setTimeout(() => {
       if (!pending.has(id)) return;

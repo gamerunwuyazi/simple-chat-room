@@ -12,6 +12,7 @@ import { validateIPAndSession, isIPBanned, getUserSession, checkRateLimit } from
 import { notFoundHandler, globalErrorHandler } from './middleware/errorHandler.js';
 import { setupAllRoutes } from './routes/index.js';
 import { setupSocketIO } from './socket/index.js';
+import { cleanupExpiredBackups } from './services/favoriteBackupService.js';
 import { setSocketDependencies as setGroupDeps, isGroupAdmin } from './services/groupService.js';
 import { setSocketDependencies as setMessageDeps, getGlobalMessages, getGroupMessages } from './services/messageService.js';
 import { initUserService } from './services/userService.js';
@@ -343,6 +344,61 @@ async function initializeDatabase() {
         INDEX idx_socket_log_time (timestamp)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    // 收藏表：元数据归服务端（换设备可同步）。文件类只存原始文件 URL，
+    // 不复制、不单独计算过期，可用性完全跟随原文件（保留 7 天）。
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_favorites (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        message_id INT NOT NULL COMMENT '源消息ID',
+        source VARCHAR(20) NOT NULL COMMENT '来源会话: global/group/private',
+        category VARCHAR(10) NOT NULL COMMENT '分类: text/image/video/audio/file',
+        message_type INT NOT NULL DEFAULT 0 COMMENT '源消息类型',
+        content TEXT COMMENT '文字内容快照（引用消息只存引用者自身文字）',
+        nickname VARCHAR(255) DEFAULT NULL COMMENT '发送者昵称快照',
+        avatar_url VARCHAR(500) DEFAULT NULL COMMENT '发送者头像快照',
+        filename VARCHAR(500) DEFAULT NULL COMMENT '文件类原始文件名',
+        file_size BIGINT DEFAULT 0 COMMENT '文件字节数（0 表示非文件类或无文件）',
+        file_url VARCHAR(500) DEFAULT NULL COMMENT '原文件URL（可用性跟随原文件7天保留期）',
+        msg_timestamp BIGINT DEFAULT NULL COMMENT '源消息时间戳',
+        favorited_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_favorite (user_id, source, message_id),
+        FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // 兼容旧表：补 file_url 列（MySQL 8 无 ADD COLUMN IF NOT EXISTS，先查 information_schema）
+    const [fileUrlCol] = await pool.execute(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'scr_favorites' AND COLUMN_NAME = 'file_url'`
+    );
+    if (fileUrlCol.length === 0) {
+      await pool.execute(
+        'ALTER TABLE scr_favorites ADD COLUMN file_url VARCHAR(500) DEFAULT NULL COMMENT \'原文件URL（可用性跟随原文件7天保留期）\' AFTER file_size'
+      );
+      console.log('✅ scr_favorites 已添加 file_url 列');
+    }
+
+    // 收藏文件备份：旧设备手动上传 → 新设备 24 小时内取回。
+    // 每月最多 3 次（batch 维度），过期后每小时清理。
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_favorite_backups (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        favorite_id INT NOT NULL COMMENT '对应收藏记录ID',
+        batch_id VARCHAR(40) NOT NULL COMMENT '上传批次ID',
+        filename VARCHAR(500) DEFAULT NULL COMMENT '原始文件名',
+        file_path VARCHAR(500) NOT NULL COMMENT '服务端备份文件路径',
+        file_size BIGINT DEFAULT 0 COMMENT '文件字节数',
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at DATETIME NOT NULL COMMENT '过期时间（上传后24小时）',
+        INDEX idx_backup_expires (expires_at),
+        INDEX idx_backup_user_exp (user_id, expires_at),
+        INDEX idx_backup_user_fav (user_id, favorite_id),
+        FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
   } catch (err) {
     console.error('❌ 数据库初始化失败:', err.message);
     throw err;
@@ -472,6 +528,7 @@ async function cleanExpiredFiles() {
       }
       deletedFileCount > 0 ? console.log(`✅ 清理了 ${deletedFileCount} 个过期文件`) : null;
     }
+
   } catch (err) {
     console.error('❌ 清理过期文件失败:', err.message);
   }
@@ -531,6 +588,9 @@ async function startServer() {
         await cleanupExpiredSessions();
       });
     });
+
+    // 每小时整点：清理过期的收藏备份文件（24 小时有效期，按小时精度，集群单实例执行）
+    schedule.scheduleJob('0 * * * *', () => runOnOneInstance('cleanup-favorite-backups', 3000, cleanupExpiredBackups));
 
     // 每分钟检查一次 API 日志 / Socket 事件日志表大小，超阈值分块清理（集群单实例执行）
     schedule.scheduleJob('* * * * *', () => runOnOneInstance('cleanup-logs', 50, cleanupLogs));

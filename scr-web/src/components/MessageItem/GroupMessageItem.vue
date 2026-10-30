@@ -126,6 +126,7 @@ import { useFriendStore } from '@/stores/friendStore';
 import { useModalStore } from '@/stores/modalStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useInputStore } from '@/stores/inputStore';
+import { useFavoriteStore } from '@/stores/favoriteStore';
 import { openUserAvatarPopup } from '@/stores/index.js';
 import { showGroupCardPopup, getChatSocket } from '@/utils/chat';
 import { formatMessageTime } from '@/utils/chat/message.js';
@@ -152,6 +153,7 @@ const friendStore = useFriendStore();
 const modalStore = useModalStore();
 const sessionStore = useSessionStore();
 const inputStore = useInputStore();
+const favoriteStore = useFavoriteStore();
 const { setupKeyboard } = useContextMenuKeyboard();
 
 const isActive = ref(false);
@@ -669,7 +671,8 @@ function escapeHtmlForMarkdown(str) {
   return String(str)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+    // 注意：不要转义 '>' —— 它是 markdown 块引用语法，转义会导致 '> xxx' 无法渲染。
+    // '<' 才是 HTML 标签的起始字符（真正的注入面），保持转义即可，安全性不受影响。
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
@@ -900,7 +903,34 @@ function handleContextMenu(event) {
   });
   
   contextMenu.appendChild(quoteMenuItem);
-  
+
+  // 收藏：群聊来源为 group。
+  // 群名片/系统消息/撤回/用户信息更新/已读回执不可收藏，直接不渲染该菜单项。
+  if (favoriteStore.isFavoritable(props.message)) {
+    const favoriteMenuItem = document.createElement('div');
+    favoriteMenuItem.className = 'context-menu-item';
+    const alreadyFavorited = favoriteStore.isFavorited(messageId, 'group');
+    favoriteMenuItem.textContent = alreadyFavorited ? '取消收藏' : '收藏';
+    favoriteMenuItem.style.padding = '8px 15px';
+    favoriteMenuItem.style.cursor = 'pointer';
+    favoriteMenuItem.style.fontSize = '14px';
+    favoriteMenuItem.style.whiteSpace = 'nowrap';
+
+    favoriteMenuItem.addEventListener('click', async () => {
+      try {
+        const favorited = await favoriteStore.toggleFavorite(props.message, 'group');
+        toast.info(favorited ? '已收藏' : '已取消收藏', 1500);
+      } catch (err) {
+        // 服务端限额拒绝（300条总数/100条文件类/512MB总大小/重复收藏），
+        // 直接把服务端给的原因提示给用户
+        toast.error(err.message || '操作失败', 2500);
+      }
+      hideContextMenu();
+    });
+
+    contextMenu.appendChild(favoriteMenuItem);
+  }
+
   const showCopyMenuItem = [0, 1, 2, 5].includes(messageType);
   if (showCopyMenuItem) {
     const copyMenuItem = document.createElement('div');

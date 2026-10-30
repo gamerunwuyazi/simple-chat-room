@@ -23,19 +23,6 @@
               </div>
             </div>
           </div>
-          <div class="mobile-drawer-section">
-            <h4>离线用户</h4>
-            <div class="mobile-user-list">
-              <div v-if="userStore.offlineUsers.length === 0" class="mobile-empty-hint">暂无离线用户</div>
-              <div v-else v-for="user in userStore.offlineUsers" :key="user.id" class="mobile-user-item" @click="handleUserClick(user)">
-                <span class="mobile-user-avatar">
-                  <img v-if="getAvatarUrl(user) && !isSvgAvatar(getAvatarUrl(user))" :src="`${baseStore.SERVER_URL}${getAvatarUrl(user)}`" :alt="user.nickname" @error="handleAvatarError($event, user)">
-                  <span v-else class="mobile-user-avatar-text">{{ (user.nickname || 'U').charAt(0).toUpperCase() }}</span>
-                </span>
-                <span class="mobile-user-name">{{ user.nickname }}</span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -78,6 +65,10 @@
         <span class="mobile-tab-icon"><i class="fas fa-user tab-icon-img"></i></span>
         <span class="mobile-tab-label">私信</span>
         <span v-if="friendRequestUnread" class="mobile-tab-badge">{{ friendRequestUnread > 99 ? '99+' : friendRequestUnread }}</span>
+      </div>
+      <div class="mobile-tab" :class="{ active: currentTab === 'favorites' }" @click="switchTab('favorites')">
+        <span class="mobile-tab-icon"><i class="fas fa-box tab-icon-img"></i></span>
+        <span class="mobile-tab-label">收藏</span>
       </div>
       <div class="mobile-tab" :class="{ active: currentTab === 'settings' }" @click="switchTab('settings')">
         <span class="mobile-tab-icon"><i class="fas fa-gear tab-icon-img"></i></span>
@@ -130,6 +121,7 @@ const currentTab = computed(() => {
   if (path === '/chat' || path === '/chat/') return 'unified';
   if (path.startsWith('/chat/group')) return 'group';
   if (path.startsWith('/chat/private')) return 'private';
+  if (path.startsWith('/chat/favorites')) return 'favorites';
   if (path.startsWith('/chat/settings')) return 'settings';
   return 'unified';
 });
@@ -140,6 +132,7 @@ const isInChat = computed(() => {
   if (currentTab.value === 'group') return !!sessionStore.currentGroupId;
   if (currentTab.value === 'private') return !!sessionStore.currentPrivateChatUserId;
   if (currentTab.value === 'settings') return showSettingsDetail.value;
+  if (currentTab.value === 'favorites') return true;
   return false;
 });
 
@@ -156,6 +149,9 @@ const chatTitle = computed(() => {
   }
   if (currentTab.value === 'settings') {
     return '设置';
+  }
+  if (currentTab.value === 'favorites') {
+    return '收藏';
   }
   return '聊天';
 });
@@ -229,6 +225,7 @@ function switchTab(tab) {
     public: '/chat',
     group: '/chat/group',
     private: '/chat/private',
+    favorites: '/chat/favorites',
     settings: '/chat/settings'
   };
   if (paths[tab] && paths[tab] !== route.path) {

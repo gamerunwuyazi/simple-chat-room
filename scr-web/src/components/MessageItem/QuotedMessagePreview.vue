@@ -96,7 +96,8 @@ function escapeHtmlForMarkdown(str) {
  return String(str)
  .replace(/&/g, '&amp;')
  .replace(/</g, '&lt;')
- .replace(/>/g, '&gt;')
+ // 注意：不要转义 '>' —— 它是 markdown 块引用语法，转义会导致 '> xxx' 无法渲染。
+ // '<' 才是 HTML 标签的起始字符（真正的注入面），保持转义即可，安全性不受影响。
  .replace(/"/g, '&quot;')
  .replace(/'/g, '&#39;');
 }

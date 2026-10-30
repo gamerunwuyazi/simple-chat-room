@@ -80,20 +80,14 @@ function updateUserList(users) {
   }
 
   const userStore = useUserStore();
-  const baseStore = useBaseStore();
   if (userStore) {
-    const currentUserId = baseStore.currentUser?.id;
-    
     const processedUsers = users.map(user => ({
       ...user,
       nickname: user.nickname
     }));
     
     const onlineUsers = processedUsers.filter(u => u.isOnline !== false);
-    // 离线用户列表过滤掉当前用户
-    const offlineUsers = processedUsers.filter(u => u.isOnline === false && String(u.id) !== String(currentUserId));
     userStore.onlineUsers = onlineUsers;
-    userStore.offlineUsers = offlineUsers;
   }
 }
 
@@ -1194,11 +1188,6 @@ function initializeWebSocket() {
                 isOnline: true
             });
         }
-        // 从离线列表中移除（若存在）
-        const offlineIndex = userStore.offlineUsers.findIndex(u => String(u.id) === idStr);
-        if (offlineIndex !== -1) {
-            userStore.offlineUsers.splice(offlineIndex, 1);
-        }
     });
 
     // 用户下线广播事件（含用户信息）
@@ -1208,19 +1197,6 @@ function initializeWebSocket() {
         const onlineIndex = userStore.onlineUsers.findIndex(u => String(u.id) === idStr);
         if (onlineIndex !== -1) {
             userStore.onlineUsers.splice(onlineIndex, 1);
-        }
-        // 当前离线列表不包含自己，仅补充其他用户
-        if (onlineIndex !== -1 && String(baseStore.currentUser?.id) !== idStr) {
-            const offlineIndex = userStore.offlineUsers.findIndex(u => String(u.id) === idStr);
-            if (offlineIndex === -1) {
-                userStore.offlineUsers.push({
-                    id: data.id,
-                    nickname: data.nickname,
-                    avatarUrl: data.avatarUrl,
-                    isOnline: false,
-                    lastOnline: new Date().toISOString()
-                });
-            }
         }
     });
 
@@ -2947,7 +2923,7 @@ function loadMessages(type, options = {}) {
 
 // ============================================
 // WebSocket 连接管理辅助函数
-// 包含消息发送启用/禁用、用户/IP状态检查、离线用户管理
+// 包含消息发送启用/禁用、用户/IP状态检查
 // ============================================
 
 /**

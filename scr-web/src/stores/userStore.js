@@ -8,7 +8,6 @@ import { useUnifiedStore } from './unifiedStore';
 
 export const useUserStore = defineStore('user', () => {
   const onlineUsers = ref([]);
-  const offlineUsers = ref([]);
 
   function findUserById(userId) {
     const baseStore = useBaseStore();
@@ -223,7 +222,6 @@ export const useUserStore = defineStore('user', () => {
 
   return {
     onlineUsers,
-    offlineUsers,
     findUserById,
     getUserName,
     getUserAvatar,
