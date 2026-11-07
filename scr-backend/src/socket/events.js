@@ -36,7 +36,12 @@ export const SocketEvents = {
   
   // 清除未读计数
   CLEAR_GROUP_UNREAD: 'clear-group-unread',
-  CLEAR_GLOBAL_UNREAD: 'clear-global-unread'
+  CLEAR_GLOBAL_UNREAD: 'clear-global-unread',
+
+  // 正在输入（高频可丢，走 Redis pub/sub 分片，不走 Streams）
+  TYPING_START: 'typing-start',
+  TYPING_STOP: 'typing-stop',
+  TYPING_UPDATE: 'typing-update'
 };
 
 export default SocketEvents;

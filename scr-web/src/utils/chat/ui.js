@@ -570,7 +570,10 @@ function updateGroupMuteIcon(groupItem, groupId) {
     if (isGroupMuted(groupId)) {
         muteIcon = document.createElement('span');
         muteIcon.className = 'mute-icon';
-        muteIcon.textContent = '🔕';
+        const muteGlyph = document.createElement('i');
+        muteGlyph.className = 'fas fa-bell-slash';
+        muteGlyph.setAttribute('aria-hidden', 'true');
+        muteIcon.appendChild(muteGlyph);
         muteIcon.style.marginLeft = '5px';
         muteIcon.style.fontSize = '12px';
         muteIcon.title = '已免打扰';

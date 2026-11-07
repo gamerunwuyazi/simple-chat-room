@@ -26,12 +26,22 @@
       </div>
 
       <div id="groupMessageContainer" ref="groupMessageContainerRef">
-        <template v-if="groupMessages.length !== 0">
+        <template v-if="groupMessages.length !== 0 || pendingMessages.length !== 0">
           <GroupMessageItem
             v-for="message in groupMessages"
             :key="message.id"
             :message="message"
+            :group-creator-id="currentGroupInfo?.creator_id ?? currentGroupInfo?.creatorId"
             :is-own="isOwnMessage(message)"
+          />
+          <PendingBubble
+            v-for="item in pendingMessages"
+            :key="item.clientMsgId"
+            :content="item.content"
+            :message-type="item.messageType"
+            :status="item.status"
+            :error="item.error"
+            @retry="handlePendingRetry(item.clientMsgId)"
           />
         </template>
         <div v-else class="empty-state">
@@ -39,7 +49,13 @@
           <p>发送第一条消息开始群聊吧!</p>
         </div>
       </div>
+      <TypingIndicator :names="typingNames" />
       <div class="input-area">
+        <div v-if="unreadAtMeCount > 0" class="at-me-banner" @click="jumpToLatestAtMe">
+          <i class="fas fa-at" aria-hidden="true"></i>
+          <span class="at-me-banner-text">{{ unreadAtMeCount }} 条@我的消息</span>
+          <span class="at-me-banner-hint">点击查看</span>
+        </div>
         <QuotedMessagePreview v-if="inputStore.quotedMessage" :quoted-message="inputStore.quotedMessage" @close="inputStore.clearQuotedMessage()" />
         <div class="input-container"
           @drop="handleGroupDrop"
@@ -99,7 +115,10 @@
         <div class="input-buttons" id="groupInputButtons">
           <button id="sendGroupMessage" @click="handleSendGroupMessage">发送</button>
           <button id="groupMoreButton" class="more-button" title="更多功能" @click="toggleMoreFunctions">
-            ⋯ <span class="button-text">更多</span>
+            <i class="fas fa-ellipsis" aria-hidden="true"></i> <span class="button-text">更多</span>
+          </button>
+          <button class="emoji-button" title="表情" @click.stop="showEmoji = !showEmoji">
+            <i class="far fa-smile" aria-hidden="true"></i>
           </button>
           <button class="toggle-btn" 
             @click="toggleMarkdownToolbar">
@@ -124,6 +143,12 @@
           <button id="groupSearchMessageButton" title="查找消息" @click="openSearchModal">
             <i class="fas fa-search"></i> <span class="button-text">查找消息</span>
           </button>
+          <button v-if="canUseChain" id="groupCreateChainButton" title="发起接龙" @click="openCreateChain">
+            <i class="fas fa-link"></i> <span class="button-text">发起接龙</span>
+          </button>
+          <button v-if="canUseVote" id="groupCreateVoteButton" title="发起投票" @click="openCreateVote">
+            <i class="fas fa-chart-bar"></i> <span class="button-text">发起投票</span>
+          </button>
         </div>
         <input v-if="showImageInput" type="file" ref="groupImageInputRef" id="groupImageInput" style="display: none;" accept="image/*" @change="handleGroupImageUpload" @cancel="handleGroupImageCancel">
         <input v-if="showFileInput" type="file" ref="groupFileInputRef" id="groupFileInput" style="display: none;" @change="handleGroupFileUpload" @cancel="handleGroupFileCancel">
@@ -134,15 +159,32 @@
         <div class="upload-progress-bar" id="groupUploadProgressBar" :style="{ width: inputStore.uploadProgress + '%' }"></div>
       </div>
 
+      <EmojiPanel v-model:visible="showEmoji" @select="insertGroupEmoji" />
+
+      <CreateChainModal
+        v-model="showCreateChainModal"
+        mode="create"
+        :submitting="createChainSubmitting"
+        @confirm="handleCreateChain"
+      />
+      <CreateVoteModal
+        v-model="showCreateVoteModal"
+        :submitting="createVoteSubmitting"
+        @confirm="handleCreateVote"
+      />
+
       <SearchMessageModal
         v-model="showSearchModal"
         :search-results="searchResults"
         :is-searching="isSearching"
         :has-searched="hasSearched"
+        :is-loading-more="isLoadingMore"
+        :has-more="hasMore"
         @search="executeSearch"
         @navigate-prev="navigateToPrevSearchResult"
         @navigate-next="navigateToNextSearchResult"
         @scroll-to-message="scrollToMessage"
+        @load-more="loadMore"
       >
         <template #results="{ results, onClick }">
           <GroupMessageItem
@@ -159,6 +201,76 @@
 </template>
 
 <style scoped>
+/* @我提醒：微信式小气泡，浮在输入区上方居中，不再横穿整行 */
+.at-me-banner {
+  align-self: center;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: #1a6fd4;
+  background: #eaf3ff;
+  border: 1px solid rgba(74, 158, 255, 0.35);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.at-me-banner::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid #eaf3ff;
+}
+
+.at-me-banner:hover {
+  background: #d8e9ff;
+}
+
+.at-me-banner:hover::after {
+  border-top-color: #d8e9ff;
+}
+
+.at-me-banner-text {
+  font-weight: 500;
+}
+
+.at-me-banner-hint {
+  font-size: 12px;
+  color: #5b8fd6;
+}
+
+body.dark-mode .at-me-banner {
+  background: #21262d;
+  border-color: rgba(121, 192, 255, 0.35);
+  color: #79c0ff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+body.dark-mode .at-me-banner::after {
+  border-top-color: #21262d;
+}
+
+body.dark-mode .at-me-banner:hover {
+  background: #2b3442;
+}
+
+body.dark-mode .at-me-banner:hover::after {
+  border-top-color: #2b3442;
+}
+
+body.dark-mode .at-me-banner-hint {
+  color: #8b949e;
+}
+
 .chat-at-user {
   color: #00f;
   border-radius: 3px;
@@ -309,7 +421,19 @@ import {
 import toast from "@/utils/toast";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
+import PendingBubble from "@/components/MessageStatus/PendingBubble.vue";
+import TypingIndicator from "@/components/MessageStatus/TypingIndicator.vue";
+import CreateChainModal from "@/components/GroupFeature/CreateChainModal.vue";
+import CreateVoteModal from "@/components/GroupFeature/CreateVoteModal.vue";
+import { useMessageBrowse } from "@/composables/useMessageBrowse";
+import { useGroupFeatureStore } from '@/stores/groupFeatureStore';
+import EmojiPanel from "@/components/EmojiPanel.vue";
 import { getGroupInfo, getGroupMembers } from '@/api/group.js';
+import { onSocket } from '@/utils/chat/websocket.js';
+import { useMessageStatusStore } from '@/stores/messageStatusStore';
+import { useTypingStore } from '@/stores/typingStore';
+import { notifyTyping, stopTyping, typingSetting } from '@/utils/chat/typing.js';
+import { resend as resendMessage } from '@/utils/chat/messageStatus.js';
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -317,7 +441,7 @@ const groupStore = useGroupStore();
 const sessionStore = useSessionStore();
 const inputStore = useInputStore();
 const draftStore = useDraftStore();
-const { scrollAndHighlight } = useMessageHighlight();
+const { scrollAndHighlight, highlightMessage, clearHighlight } = useMessageHighlight();
 const friendStore = useFriendStore();
 const unifiedStore = useUnifiedStore();
 const modalStore = useModalStore();
@@ -352,6 +476,198 @@ const showMoreFunctions = ref(false);
 const currentGroupInfo = ref(null);
 const groupMembers = ref([]);
 const avatarLoadFailedMap = ref({});
+const showEmoji = ref(false);
+
+const messageStatusStore = useMessageStatusStore();
+const typingStore = useTypingStore();
+const featureStore = useGroupFeatureStore();
+
+const showCreateChainModal = ref(false);
+const showCreateVoteModal = ref(false);
+const createChainSubmitting = ref(false);
+const createVoteSubmitting = ref(false);
+
+// 发起入口开关：管理员/群主不受限制；拉取失败先放行，由后端 403 兜底
+const groupFeatureSettings = computed(() => featureStore.groupSettings[String(currentGroupId.value)] || null);
+const canUseChain = computed(() => {
+  if (isCurrentUserGroupAdmin()) return true;
+  const settings = groupFeatureSettings.value;
+  return !settings || settings.allowChain !== false;
+});
+const canUseVote = computed(() => {
+  if (isCurrentUserGroupAdmin()) return true;
+  const settings = groupFeatureSettings.value;
+  return !settings || settings.allowVote !== false;
+});
+
+function isCurrentUserGroupAdmin() {
+  const uid = String(currentUserId.value ?? '');
+  if (!uid) return false;
+  if (groupStore.currentGroupMembers?.some((m) => String(m.id) === uid && Number(m.is_admin) > 0)) return true;
+  const info = currentGroupInfo.value;
+  const creatorId = info?.creator_id ?? info?.creatorId ?? info?.ownerId ?? info?.owner_id;
+  return creatorId !== undefined && creatorId !== null && String(creatorId) === uid;
+}
+
+const featureSocketEvents = [
+  'message-received',
+  'group-chain-created',
+  'group-chain-updated',
+  'group-vote-created',
+  'group-vote-updated',
+  'vote-closed',
+  'group-settings-updated'
+];
+const featureSocketUnsubs = [];
+
+function bindFeatureSocket() {
+  if (featureSocketUnsubs.length > 0) return;
+  featureSocketEvents.forEach((event) => {
+    featureSocketUnsubs.push(onSocket(event, (payload) => featureStore.applySocketEvent(event, payload)));
+  });
+}
+
+function unbindFeatureSocket() {
+  while (featureSocketUnsubs.length) {
+    const off = featureSocketUnsubs.pop();
+    try {
+      off();
+    } catch (e) {
+      // 忽略解绑异常
+    }
+  }
+}
+
+function openCreateChain() {
+  showMoreFunctions.value = false;
+  showCreateChainModal.value = true;
+}
+
+function openCreateVote() {
+  showMoreFunctions.value = false;
+  showCreateVoteModal.value = true;
+}
+
+async function handleCreateChain({ title, content }) {
+  if (!currentGroupId.value) return;
+  createChainSubmitting.value = true;
+  try {
+    await featureStore.createChainItem(currentGroupId.value, { title, content });
+    showCreateChainModal.value = false;
+  } catch (e) {
+    toast.error(e?.response?.data?.message || e?.message || '发起接龙失败', 2500);
+  } finally {
+    createChainSubmitting.value = false;
+  }
+}
+
+async function handleCreateVote(payload) {
+  if (!currentGroupId.value) return;
+  createVoteSubmitting.value = true;
+  try {
+    await featureStore.createVoteItem(currentGroupId.value, payload);
+    showCreateVoteModal.value = false;
+  } catch (e) {
+    toast.error(e?.response?.data?.message || e?.message || '发起投票失败', 2500);
+  } finally {
+    createVoteSubmitting.value = false;
+  }
+}
+
+
+const currentGroupId = computed(() => sessionStore.currentGroupId || null);
+
+// 接龙/投票动态数据：进入群时刷新一次，之后由 socket 事件按 id upsert
+watch(currentGroupId, (groupId) => {
+  if (!groupId) return;
+  featureStore.hydrate(groupId).catch(() => {});
+  featureStore.loadSettings(groupId);
+}, { immediate: true });
+const typingNames = computed(() => {
+  // 设置页关掉「显示自己正在输入」后，也不再显示别人的输入提示
+  if (!typingSetting.value) return [];
+  return currentGroupId.value ? typingStore.list('group', currentGroupId.value, baseStore.currentUser?.id) : [];
+});
+
+// ---------------------------------------------------------------- @我 气泡
+const AT_ME_READ_PREFIX = 'group_at_me_read_';
+
+function atMeReadKey(groupId) {
+  return `${AT_ME_READ_PREFIX}${baseStore.currentUser?.id || 'guest'}_${groupId}`;
+}
+
+function loadAtMeReadId(groupId) {
+  if (!groupId) return 0;
+  try {
+    return Number(localStorage.getItem(atMeReadKey(groupId))) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// 已读到的「@我」消息 id 水位，点击气泡后推进
+const atMeReadId = ref(0);
+
+function isAtMeMessage(message) {
+  const me = baseStore.currentUser?.id;
+  if (!me || !message?.atUserid) return false;
+  // 撤回/系统类消息不算
+  if ([101, 102, 103, 104].includes(message.messageType)) return false;
+  // 自己 @ 自己不算
+  if (String(message.userId) === String(me)) return false;
+  const ids = Array.isArray(message.atUserid) ? message.atUserid : [message.atUserid];
+  return ids.some((id) => String(id) === String(me) || String(id) === '-1');
+}
+
+const atMeMessages = computed(() => groupMessages.value.filter(isAtMeMessage));
+
+const unreadAtMeMessages = computed(() => (
+  atMeMessages.value.filter((m) => Number(m.id) > atMeReadId.value)
+));
+
+const unreadAtMeCount = computed(() => unreadAtMeMessages.value.length);
+
+watch(currentGroupId, (groupId) => {
+  atMeReadId.value = loadAtMeReadId(groupId);
+}, { immediate: true });
+
+function jumpToLatestAtMe() {
+  const list = unreadAtMeMessages.value;
+  if (list.length === 0) {
+    atMeReadId.value = Math.max(0, ...atMeMessages.value.map((m) => Number(m.id) || 0));
+    return;
+  }
+  // 列表按 id 升序，最后一条即最近一条
+  const latest = list[list.length - 1];
+  const targetElement = groupMessageContainerRef.value?.querySelector(`[data-id="${latest.id}"]`);
+  if (targetElement) {
+    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => highlightMessage(targetElement), 300);
+    // 高亮 1.5s 后清掉
+    setTimeout(() => clearHighlight(), 1800);
+  }
+
+  const newReadId = Math.max(...list.map((m) => Number(m.id) || 0));
+  atMeReadId.value = newReadId;
+  try {
+    localStorage.setItem(atMeReadKey(currentGroupId.value), String(newReadId));
+  } catch (e) {
+    // 隐私模式下仅内存态
+  }
+  if (currentGroupId.value) groupStore.clearGroupHasAtMe(currentGroupId.value);
+}
+
+function handlePendingRetry(clientMsgId) {
+  resendMessage(clientMsgId);
+}
+
+function insertGroupEmoji(emoji) {
+  const input = groupMessageInputRef.value;
+  if (!input) return;
+  input.focus();
+  document.execCommand('insertText', false, emoji);
+  handleGroupMessageInput();
+}
 
 function getAvatarIsImage(user) {
   return getFullAvatarUrl(user) !== '' && !avatarLoadFailedMap.value[user.id];
@@ -390,6 +706,17 @@ const currentUserId = computed(() => baseStore.currentUser?.id);
 
 const groupMessages = computed(() => {
   return groupStore.groupMessages[sessionStore.currentGroupId] || [];
+});
+
+// 发送状态按 messageId 交接：真实消息渲染出来之前，气泡不撤（列表刷新也不重置动画）
+const groupMessageIds = computed(() => groupMessages.value.map((message) => message.id));
+const pendingMessages = computed(() => (
+  currentGroupId.value
+    ? messageStatusStore.listVisible('group', currentGroupId.value, groupMessageIds.value)
+    : []
+));
+watch(groupMessageIds, (ids) => {
+  messageStatusStore.pruneRendered('group', currentGroupId.value, ids);
 });
 
 function isOwnMessage(message) {
@@ -663,8 +990,11 @@ function handleGroupMessageInput() {
       input.innerHTML = '';
       showAtPicker.value = false;
       inputStore.groupMessageInput = '';
+      stopTyping('group', currentGroupId.value);
       return;
     }
+
+    notifyTyping('group', currentGroupId.value);
     
     if (restoringGroupDraft) {
       return;
@@ -831,6 +1161,7 @@ function handleGroupCompositionEnd() {
 
 function handleSendGroupMessage() {
   sendGroupMessage();
+  stopTyping('group', currentGroupId.value);
   scrollToBottom();
 }
 
@@ -1063,10 +1394,22 @@ function handleGroupVideoCancel() {
 
 const showSearchModal = ref(false);
 const searchKeyword = ref('');
-const searchResults = ref([]);
-const isSearching = ref(false);
-const hasSearched = ref(false);
 const currentSearchIndex = ref(0);
+
+// 查找消息：浏览（无关键词按类型）+ 关键词查找都走后端 /api/messages/browse，
+// scope=group 且只能查自己所在的群，权限边界由后端校验
+const {
+  searchResults,
+  isSearching,
+  hasSearched,
+  isLoadingMore,
+  hasMore,
+  executeSearch: runMessageBrowse,
+  loadMore
+} = useMessageBrowse(() => ({
+  scope: 'group',
+  groupId: sessionStore.currentGroupId
+}));
 
 function openSearchModal() {
   showSearchModal.value = true;
@@ -1080,58 +1423,44 @@ function closeSearchModal() {
   hasSearched.value = false;
 }
 
-async function executeSearch(keyword) {
-  if (!keyword || !keyword.trim()) return;
-  searchKeyword.value = keyword;
-  
-  isSearching.value = true;
-  hasSearched.value = false;
-  searchResults.value = [];
-  
+async function executeSearch(keyword, types = []) {
+  searchKeyword.value = String(keyword || '').trim();
+  await runMessageBrowse(keyword, types);
+  if (!searchKeyword.value) return;
+
+  // 关键词模式：为命中的旧消息补充上下文到主列表，保证点击结果可以跳转定位
   try {
     const groupId = sessionStore.currentGroupId;
     const prefix = `chats-${baseStore.currentUser?.id || 'guest'}`;
     const storageKey = `${prefix}-group-${groupId}`;
-    
+
     const storageData = await localForage.getItem(storageKey);
     const allMessages = storageData?.messages || [];
-    const keyword = searchKeyword.value.trim().toLowerCase();
-    
-    const matchedMessages = allMessages
-      .filter(msg => {
-        if (msg.messageType === 101 || msg.messageType === 102 || msg.messageType === 103) return false;
-        const content = msg.content?.toLowerCase() || '';
-        const nickname = msg.nickname?.toLowerCase() || '';
-        return content.includes(keyword) || nickname.includes(keyword);
-      });
-    
-    if (matchedMessages.length > 0) {
-      searchResults.value = [...matchedMessages].reverse();
-      
-      const minMatchedId = Math.min(...matchedMessages.map(m => m.id));
-      
-      const storeMessages = groupStore.groupMessages[groupId] || [];
-      if (storeMessages.length > 0) {
-        const storeMinId = Math.min(...storeMessages.map(m => m.id));
-        
-        const startId = Math.max(1, minMatchedId - 20);
-        const endId = storeMinId - 1;
-        
-        if (startId <= endId) {
-          const messagesToAdd = allMessages
-            .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
-            .sort((a, b) => a.id - b.id);
-          
-          groupStore.prependGroupMessages(groupId, messagesToAdd);
-        }
-      }
+    if (allMessages.length === 0 || searchResults.value.length === 0) return;
+
+    const localMatched = searchResults.value.filter(
+      (r) => allMessages.some((m) => m.id === r.id) && r.messageType !== 101 && r.messageType !== 102 && r.messageType !== 103
+    );
+    if (localMatched.length === 0) return;
+
+    const minMatchedId = Math.min(...localMatched.map(m => m.id));
+
+    const storeMessages = groupStore.groupMessages[groupId] || [];
+    if (storeMessages.length === 0) return;
+    const storeMinId = Math.min(...storeMessages.map(m => m.id));
+
+    const startId = Math.max(1, minMatchedId - 20);
+    const endId = storeMinId - 1;
+
+    if (startId <= endId) {
+      const messagesToAdd = allMessages
+        .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
+        .sort((a, b) => a.id - b.id);
+
+      groupStore.prependGroupMessages(groupId, messagesToAdd);
     }
-    
-    hasSearched.value = true;
   } catch (err) {
-    console.error('搜索失败:', err);
-  } finally {
-    isSearching.value = false;
+    console.error('补充搜索结果上下文失败:', err);
   }
 }
 
@@ -1362,6 +1691,7 @@ function handleGroupMembersChanged(event) {
 onMounted(() => {
   window.addEventListener('group-switched', handleGroupSwitched);
   window.addEventListener('group-members-changed', handleGroupMembersChanged);
+  bindFeatureSocket();
 
   if (sessionStore.currentGroupId) {
     applySavedGroupState();
@@ -1419,6 +1749,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('group-switched', handleGroupSwitched);
   window.removeEventListener('group-members-changed', handleGroupMembersChanged);
+  unbindFeatureSocket();
   // 离开群聊时保存草稿（消息页嵌入面板或独立路由页卸载均触发，此时 ref 仍指向输入框）
   const groupId = sessionStore.currentGroupId;
   const inputEl = groupMessageInputRef.value;

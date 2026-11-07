@@ -645,7 +645,7 @@ export async function getSelfInfo(req, res) {
     }
 
     const [users] = await pool.execute(
-      'SELECT id, username, nickname, gender, signature, avatar_url, friend_verification, last_online, created_at FROM scr_users WHERE id = ?',
+      'SELECT id, username, nickname, gender, signature, avatar_url, friend_verification, show_typing, last_online, created_at FROM scr_users WHERE id = ?',
       [userId]
     );
 
@@ -665,6 +665,7 @@ export async function getSelfInfo(req, res) {
         signature: user.signature,
         avatar_url: user.avatar_url,
         friend_verification: user.friend_verification === 1,
+        show_typing: user.show_typing === 1,
         last_online: user.last_online,
         created_at: user.created_at
       }

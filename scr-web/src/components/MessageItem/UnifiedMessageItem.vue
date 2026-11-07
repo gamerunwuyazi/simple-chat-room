@@ -10,7 +10,7 @@
   </div>
   <div 
     v-else
-    :class="['message', isOwn ? 'own-message' : 'other-message', { 'active': isActive }]"
+    :class="['message', isOwn ? 'own-message' : 'other-message', { 'active': isActive, 'is-mention-me': isMentionMe }]"
     :data-id="message.id"
     :data-user-id="senderId"
     @contextmenu="handleContextMenu"
@@ -61,7 +61,7 @@
           target="_blank"
           style="color: #3498db; text-decoration: none;"
         >
-          <span class="file-icon">{{ fileIcon }}</span>
+          <span class="file-icon"><i class="fas" :class="fileIcon" aria-hidden="true"></i></span>
           <span>{{ displayFilename }}</span>
         </a>
       </div>
@@ -102,6 +102,12 @@
         </div>
         <QuotedMessage :quoted-message-data="quotedMessageData.quoted" />
       </template>
+      <div v-else-if="chainPayload" class="feature-message-container">
+        <ChainMessage :payload="chainPayload" :message-type="props.message.messageType" />
+      </div>
+      <div v-else-if="votePayload" class="feature-message-container">
+        <VoteMessage :payload="votePayload" />
+      </div>
       <div v-else-if="parsedContent" v-html="parsedContent" class="message-text"></div>
         </div>
       </div>
@@ -119,15 +125,21 @@ import { useBaseStore } from '@/stores/baseStore';
 import { useUnifiedStore } from '@/stores/unifiedStore';
 import { useModalStore } from '@/stores/modalStore';
 import { useInputStore } from '@/stores/inputStore';
+import { useUserStore } from '@/stores/userStore';
+import { useGroupStore } from '@/stores/groupStore';
+import { getFileIconClass } from '@/utils/fileIcon';
 import { useFavoriteStore } from '@/stores/favoriteStore';
 import { openUserAvatarPopup } from '@/stores/index.js';
 import { showGroupCardPopup, getChatSocket } from '@/utils/chat';
 import { formatMessageTime } from '@/utils/chat/message.js';
+import { highlightMentions } from '@/utils/chat/mention.js';
 import toast from '@/utils/toast';
 import { useContextMenuKeyboard } from "@/composables/useContextMenuKeyboard";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 
 import QuotedMessage from './QuotedMessage.vue';
+import ChainMessage from '@/components/GroupFeature/ChainMessage.vue';
+import VoteMessage from '@/components/GroupFeature/VoteMessage.vue';
 
 let currentMessageContextMenu = null;
 
@@ -146,6 +158,8 @@ const baseStore = useBaseStore();
 const unifiedStore = useUnifiedStore();
 const modalStore = useModalStore();
 const inputStore = useInputStore();
+const userStore = useUserStore();
+const groupStore = useGroupStore();
 const favoriteStore = useFavoriteStore();
 
 const { setupKeyboard } = useContextMenuKeyboard();
@@ -222,6 +236,8 @@ const messageData = computed(() => {
   let textContent = props.message.content;
   let groupCardData = null;
   let quotedMessageData = null;
+  let chainPayload = null;
+  let votePayload = null;
   let width = props.message.width;
   let height = props.message.height;
   let systemMessage = null;
@@ -302,6 +318,31 @@ const messageData = computed(() => {
         // Markdown消息，直接使用content作为文本内容
         textContent = props.message.content;
         break;
+      case 8:
+      case 9:
+        // 接龙头 / 参与接龙：content 为 { chainId, title, content, entryId?, entries? }（契约第 2 节）
+        try {
+          const chainData = JSON.parse(props.message.content);
+          if (chainData && chainData.chainId) {
+            chainPayload = chainData;
+            textContent = '';
+          }
+        } catch (error) {
+          console.error('解析接龙消息JSON失败:', error);
+        }
+        break;
+      case 10:
+        // 投票：content 为 { voteId, title, description, multiple, anonymous, endsAt, options }
+        try {
+          const voteData = JSON.parse(props.message.content);
+          if (voteData && voteData.voteId && Array.isArray(voteData.options)) {
+            votePayload = voteData;
+            textContent = '';
+          }
+        } catch (error) {
+          console.error('解析投票消息JSON失败:', error);
+        }
+        break;
       case 100:
         // 系统消息
         systemMessage = props.message.content;
@@ -313,7 +354,7 @@ const messageData = computed(() => {
     }  // end else (非撤回消息的switch)
   }
 
-  return { imageUrl, fileUrl, filename, textContent, groupCardData, quotedMessageData, width, height, systemMessage };
+  return { imageUrl, fileUrl, filename, textContent, groupCardData, quotedMessageData, chainPayload, votePayload, width, height, systemMessage };
 });
 
 const systemMessage = computed(() => messageData.value.systemMessage);
@@ -358,6 +399,8 @@ const filename = computed(() => messageData.value.filename);
 const textContent = computed(() => messageData.value.textContent);
 const groupCardData = computed(() => messageData.value.groupCardData);
 const quotedMessageData = computed(() => messageData.value.quotedMessageData);
+const chainPayload = computed(() => messageData.value.chainPayload);
+const votePayload = computed(() => messageData.value.votePayload);
 const imageWidth = computed(() => messageData.value.width);
 const imageHeight = computed(() => messageData.value.height);
 
@@ -483,31 +526,7 @@ const fullFileUrl = computed(() => {
 
 const displayFilename = computed(() => filename.value || '文件');
 
-const fileExtension = computed(() => displayFilename.value.split('.').pop().toLowerCase());
-
-const fileIcon = computed(() => {
-  let icon = '📄';
-  if (/^(pdf|doc|docx|txt|rtf)$/i.test(fileExtension.value)) {
-    icon = '📝';
-  } else if (/^(xls|xlsx|csv)$/i.test(fileExtension.value)) {
-    icon = '📊';
-  } else if (/^(zip|rar|7z|tar|gz)$/i.test(fileExtension.value)) {
-    icon = '🗜️';
-  } else if (/^(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileExtension.value)) {
-    icon = '🖼️';
-  } else if (/^(mp3|wav|ogg|flac)$/i.test(fileExtension.value)) {
-    icon = '🎵';
-  } else if (/^(mp4|avi|mov|wmv|flv)$/i.test(fileExtension.value)) {
-    icon = '🎬';
-  } else if (/^(exe|dll|bat|sh)$/i.test(fileExtension.value)) {
-    icon = '⚙️';
-  } else if (/^(ppt|pptx)$/i.test(fileExtension.value)) {
-    icon = '📋';
-  } else if (/^(js|ts|html|css|php|py|java|c|cpp|cs|go|rb|swift|kt)$/i.test(fileExtension.value)) {
-    icon = '💻';
-  }
-  return icon;
-});
+const fileIcon = computed(() => getFileIconClass(displayFilename.value));
 
 const groupCardAvatarUrl = computed(() => {
   if (groupCardAvatarLoadFailed.value) return '';
@@ -555,6 +574,41 @@ function escapeHtmlForMarkdown(str) {
     .replace(/'/g, '&#39;');
 }
 
+// @气泡：主聊天室可被 @ 的昵称取自「在线用户」（与输入框 @ 候选同源），
+// 若该组件被复用到群上下文，再并上当前群成员昵称（群昵称优先）。
+const mentionNicknames = computed(() => {
+  const names = [];
+  (userStore.onlineUsers || []).forEach((user) => {
+    if (user?.nickname) names.push(user.nickname);
+  });
+  (groupStore.currentGroupMembers || []).forEach((member) => {
+    if (member.group_nickname) names.push(member.group_nickname);
+    if (member.nickname) names.push(member.nickname);
+  });
+  return names;
+});
+
+const selfNicknames = computed(() => {
+  const names = [];
+  const current = baseStore.currentUser;
+  if (current) {
+    if (current.nickname) names.push(current.nickname);
+    if (current.username) names.push(current.username);
+  }
+  const selfMember = (groupStore.currentGroupMembers || []).find(
+    (member) => String(member.id) === String(current?.id ?? '')
+  );
+  if (selfMember?.group_nickname) names.push(selfMember.group_nickname);
+  return names;
+});
+
+function applyMentionHighlight(html) {
+  return highlightMentions(html, {
+    nicknames: mentionNicknames.value,
+    selfNicknames: selfNicknames.value
+  });
+}
+
 const parsedContent = computed(() => {
   if (!textContent.value) return '';
 
@@ -568,7 +622,8 @@ const parsedContent = computed(() => {
     escapedContent = escapedContent.replace(urlRegex, (url) => {
       return `<a href="${url}" class="message-link" target="_blank" rel="noopener noreferrer" style="color: #3498db; text-decoration: none;">${url}</a>`;
     });
-    return `<p>${escapedContent}</p>`;
+    // 只对「已转义」的内容做 @ 标记，不自行拼 HTML
+    return `<p>${applyMentionHighlight(escapedContent)}</p>`;
   }
 
   let contentToParse = escapeHtml(textContent.value);
@@ -671,35 +726,22 @@ const parsedContent = computed(() => {
     }
 
     if (hasDownloadAttr || (!isHttpLink && hasFileExtension)) {
-      const fileExt = href.split('.').pop().toLowerCase();
-      let icon = '📄';
-      if (/^(pdf|doc|docx|txt|rtf)$/i.test(fileExt)) {
-        icon = '📝';
-      } else if (/^(xls|xlsx|csv)$/i.test(fileExt)) {
-        icon = '📊';
-      } else if (/^(zip|rar|7z|tar|gz)$/i.test(fileExt)) {
-        icon = '🗜️';
-      } else if (/^(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileExt)) {
-        icon = '🖼️';
-      } else if (/^(mp3|wav|ogg|flac)$/i.test(fileExt)) {
-        icon = '🎵';
-      } else if (/^(mp4|avi|mov|wmv|flv)$/i.test(fileExt)) {
-        icon = '🎬';
-      } else if (/^(exe|dll|bat|sh)$/i.test(fileExt)) {
-        icon = '⚙️';
-      } else if (/^(ppt|pptx)$/i.test(fileExt)) {
-        icon = '📋';
-      } else if (/^(js|ts|html|css|php|py|java|c|cpp|cs|go|rb|swift|kt)$/i.test(fileExt)) {
-        icon = '💻';
-      }
+      const icon = getFileIconClass(href);
 
-      return `<div class="file-link-container"><a${attr1} ${hrefAttr}${attr2} class="file-link" target="_blank" rel="noopener noreferrer"><span class="file-icon">${icon}</span><span>${text}</span></a></div>`;
+      return `<div class="file-link-container"><a${attr1} ${hrefAttr}${attr2} class="file-link" target="_blank" rel="noopener noreferrer"><span class="file-icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span>${text}</span></a></div>`;
     }
 
     return match;
   });
 
   return DOMPurify.sanitize(parsed);
+});
+
+// 整条消息级别标识：命中「@我」则气泡加左边框/淡底色，便于一眼定位。
+// 判定用 mention.js 生成的完整 class 串，普通 @（at-mention）不会误伤
+const isMentionMe = computed(() => {
+  const html = parsedContent.value;
+  return typeof html === 'string' && html.includes('at-mention at-mention-self');
 });
 
 function handleAvatarClick(event) {
@@ -949,6 +991,25 @@ function handleGroupCardClick(event) {
 .message-text {
   white-space: pre-wrap;
 }
+
+/* @气泡：v-html 内容不带 scoped 属性，需用 :deep 穿透 */
+.message-text :deep(.at-mention) {
+  display: inline;
+  padding: 0 3px;
+  margin: 0 1px;
+  border-radius: 4px;
+  color: #4a9eff;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.message-text :deep(.at-mention-self) {
+  color: #fff;
+  background: #4a9eff;
+  font-weight: 600;
+}
+
+/* 整条消息 @了我：不再做气泡级高亮，与普通消息视觉一致（@XXX 文本保留蓝色可点击标识） */
 
 .message-text img {
   max-width: 100%;

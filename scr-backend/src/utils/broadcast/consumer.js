@@ -73,7 +73,7 @@ export function createBroadcastConsumer({ io }) {
       // 大房间内让出事件循环，避免同步连发阻塞（不丢消息）
       if (++count >= YIELD_EVERY) {
         count = 0;
-        await new Promise((resolve) => setImmediate(resolve));
+        await new Promise((resolve) => globalThis.setImmediate(resolve));
       }
     }
   }

@@ -64,6 +64,11 @@ export function filterMessageFields(message, messageType) {
     }
     baseFields.groupId = Number(message.groupId);
   } else if (messageType === 'private') {
+    // 私聊同样需要 atUserid：前端据此渲染 @气泡（私聊里 @对方 也是可见气泡）
+    const atUserid = processAtUserid(message.atUserid || message.at_userid);
+    if (atUserid) {
+      baseFields.atUserid = atUserid;
+    }
     baseFields.senderId = Number(message.senderId);
     baseFields.receiverId = Number(message.receiverId);
     baseFields.isRead = message.isRead;

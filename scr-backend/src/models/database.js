@@ -1,6 +1,7 @@
 import mysql from 'mysql2/promise';
 import { createClientPool } from 'redis';
 import { dbConfig, getRedisUrl } from '../config/index.js';
+import { resolveDbLimits } from '../config/poolBudget.js';
 
 // Redis 连接池：原先为单连接客户端，高并发（压测）时所有命令在单条 TCP 连接上排队，
 // 出现"挤爆队列"（客户端队列堆积 → 命令超时/丢弃）。
@@ -105,7 +106,22 @@ async function safeRedisExecute(operation, fallbackValue = null, options = {}) {
   }
 }
 
+// 主池限额：多实例部署时按连接预算自适应收紧（单实例维持默认大池）。
+// resolveDbLimits 在建池前完成探测/注册/计算（见 config/poolBudget.js），
+// mysql2 池创建后 connectionLimit 不可热改，故只在启动时算准。
+const dbLimits = await resolveDbLimits();
+dbConfig.connectionLimit = dbLimits.mainPoolLimit;
+
 const pool = mysql.createPool(dbConfig);
+
+// 会话级保活兜底：每次新建连接入池时提高本会话 wait_timeout/interactive_timeout。
+// 正常路径下空闲连接 60s 即被 dbConfig.idleTimeout 主动回收，活不到服务端超时；
+// 这条腿是冗余防御：即便连接在借出期间被中间设备掐断后归还，会话阈值也不背锅。
+// PromisePool 会透传底层池的 'connection' 事件（新建连接 connect 成功后同步触发），
+// 此处查询先于取用方的业务查询入队，无顺序竞争。
+pool.on('connection', (conn) => {
+  conn.query('SET SESSION wait_timeout = 28800, interactive_timeout = 28800', () => {});
+});
 
 export { pool, redisClient, safeRedisExecute, isRedisConnected };
 export default { pool, redisClient, safeRedisExecute, isRedisConnected };

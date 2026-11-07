@@ -6,7 +6,7 @@ import { parentPort, workerData } from 'worker_threads';
 import mysql from 'mysql2/promise';
 import { createClientPool } from 'redis';
 
-const { dbConfig, redisUrl, offlineLimits } = workerData;
+const { dbConfig, redisUrl, offlineLimits, workerConnectionLimit } = workerData;
 
 let dbPromise = null;
 let redisPromise = null;
@@ -15,27 +15,40 @@ function getDb() {
   if (!dbPromise) {
     // 使用连接池替代单连接：offline-messages 是重查询，若用单连接会串行阻塞
     // 同一 worker 上的 getGlobalMessages / getGroupMessages（load-messages 也走这里）。
-    dbPromise = mysql.createPool({
+    const pool = mysql.createPool({
       host: dbConfig.host,
       user: dbConfig.user,
       password: dbConfig.password,
       database: dbConfig.database,
-      // 每个 worker × 连接数需计入总连接预算；worker 池默认 1，配合主池 150，
-      // 远低于 MySQL max_connections(500)。可按需用 WORKER_DB_CONNECTION_LIMIT 调整。
-      connectionLimit: parseInt(process.env.WORKER_DB_CONNECTION_LIMIT || '8', 10),
+      // 每个 worker × 连接数需计入总连接预算。默认读主线程传入的 workerConnectionLimit
+      // （单实例=8，多实例由连接预算自适应收紧，见 config/poolBudget.js）；
+      // 兜底仍支持 WORKER_DB_CONNECTION_LIMIT 环境变量（独立运行 worker 时）。
+      connectionLimit: workerConnectionLimit || parseInt(process.env.WORKER_DB_CONNECTION_LIMIT || '8', 10),
       // 空闲连接管理：必须让 maxIdle < connectionLimit，mysql2 才会启动空闲回收器
       // （base/pool.js 的条件）。此前 maxIdle=10 ≥ connectionLimit，回收器从不启动，
       // idleTimeout 形同虚设——连接会一直存活到被 MySQL 端 wait_timeout 静默关闭，
       // 之后首次查询才报 PROTOCOL_CONNECTION_LOST，表现为"连接超时+重连数据库"。
-      // 现由客户端主动在空闲 10 分钟后 clean close，远早于 MySQL wait_timeout（默认 8h）。
+      // 防空闲假死第一条腿：空闲 60s 由客户端主动断开重建，连接活不到服务端超时；
+      // 第二条腿见下方 pool.on('connection') 的会话级 wait_timeout 兜底。
       maxIdle: 2,
-      idleTimeout: parseInt(process.env.WORKER_DB_IDLE_TIMEOUT || String(10 * 60 * 1000), 10),
+      idleTimeout: parseInt(process.env.WORKER_DB_IDLE_TIMEOUT || '60000', 10),
       // 连接超时调快（默认 10s）：MySQL 不可达时新连接 3s 即失败，
       // 配合任务层重建重试（约 3s+3s），尽快回退主线程，避免 HTTP 被拖到超时
       connectTimeout: 3000,
+      // TCP 层保活：对端静默丢弃连接（wait_timeout/网络设备）时，
+      // keepalive 探测让本端感知死连接而非把查询无限挂起。
       enableKeepAlive: true,
-      keepAliveInitialDelay: 0
+      keepAliveInitialDelay: 10000
     });
+    // 会话级保活兜底（第二条腿）：即使 idleTimeout 因故未生效（如连接被借出期间
+    // 网络设备静默掐断后归还），本端会话的 wait_timeout 也不再依赖服务端全局值。
+    // 正常路径下空闲连接 60s 即被回收，根本活不到这个阈值——两条腿互为冗余。
+    // mysql2 在每次新建连接入池时触发 'connection' 事件（同步于 connect 回调），
+    // 此处查询先于取用方的业务查询入队，不存在顺序竞争。
+    pool.on('connection', (conn) => {
+      conn.query("SET SESSION wait_timeout = 28800, interactive_timeout = 28800", () => {});
+    });
+    dbPromise = pool;
   }
   return dbPromise;
 }
@@ -81,7 +94,7 @@ async function runGetGlobalMessages({ limit, olderThan, userId, db }) {
 
   const params = [];
 
-  let safeLimit = 20;
+  let safeLimit;
   try {
     safeLimit = parseInt(limit);
     if (isNaN(safeLimit) || safeLimit <= 0) {
@@ -94,7 +107,7 @@ async function runGetGlobalMessages({ limit, olderThan, userId, db }) {
   const isOlderThanValid = olderThan !== null && olderThan !== undefined && olderThan !== '' && olderThan !== 0 && String(olderThan).trim() !== '';
 
   if (isOlderThanValid) {
-    let safeOlderThan = 0;
+    let safeOlderThan;
     try {
       safeOlderThan = parseInt(olderThan);
       if (!isNaN(safeOlderThan)) {
@@ -137,6 +150,9 @@ async function runGetGlobalMessages({ limit, olderThan, userId, db }) {
       avatarUrl: msg.avatarUrl,
       content: msg.content,
       at_userid: atUserIds,
+      // 实时推送用的是驼峰 atUserid，历史接口两种键都返回，
+      // 否则前端刷新后拿到的历史消息没有 @ 名单（@我 气泡标识会消失）
+      atUserid: atUserIds,
       messageType: msg.messageType,
       groupId: msg.groupId !== null && msg.groupId !== undefined ? parseInt(msg.groupId) : null,
       timestamp: msg.timestamp,
@@ -175,7 +191,7 @@ async function runGetGlobalMessages({ limit, olderThan, userId, db }) {
 async function runGetGroupMessages({ groupId, limit, olderThan, userId, db }) {
   const redis = await getRedis();
 
-  let safeGroupId = 0;
+  let safeGroupId;
   try {
     safeGroupId = parseInt(groupId);
     if (isNaN(safeGroupId)) {
@@ -185,7 +201,7 @@ async function runGetGroupMessages({ groupId, limit, olderThan, userId, db }) {
     return [];
   }
 
-  let safeLimit = 20;
+  let safeLimit;
   try {
     safeLimit = parseInt(limit);
     if (isNaN(safeLimit) || safeLimit <= 0) {
@@ -206,7 +222,7 @@ async function runGetGroupMessages({ groupId, limit, olderThan, userId, db }) {
 
   const isOlderThanValid = olderThan !== null && olderThan !== undefined && olderThan !== '' && olderThan !== 0 && String(olderThan).trim() !== '';
   if (isOlderThanValid) {
-    let safeOlderThan = 0;
+    let safeOlderThan;
     try {
       safeOlderThan = parseInt(olderThan);
       if (!isNaN(safeOlderThan)) {
@@ -265,6 +281,9 @@ async function runGetGroupMessages({ groupId, limit, olderThan, userId, db }) {
       avatarUrl: msg.avatarUrl,
       content: msg.content,
       at_userid: atUserIds,
+      // 实时推送用的是驼峰 atUserid，历史接口两种键都返回，
+      // 否则前端刷新后拿到的历史消息没有 @ 名单（@我 气泡标识会消失）
+      atUserid: atUserIds,
       messageType: msg.messageType,
       groupId: msg.groupId !== null && msg.groupId !== undefined ? parseInt(msg.groupId) : null,
       timestamp: msg.timestamp,
@@ -543,11 +562,29 @@ async function runGetOfflineMessages({ userId, publicAndGroupMinId, privateMinId
   };
 }
 
+// 从池取连接的超时：连接池假死（连接被网络设备静默掐断但本端不知情、查询无限挂起）
+// 或池耗尽排队时，不能让任务永远等在 getConnection 上——超时抛错，
+// 由任务层按连接级错误处理（resetDb 重建后重试），主线程的就绪超时也才有可能等到结果。
+const ACQUIRE_TIMEOUT_MS = parseInt(process.env.WORKER_DB_ACQUIRE_TIMEOUT || '4000', 10);
+
+async function acquireDb() {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('Worker 获取数据库连接超时')), ACQUIRE_TIMEOUT_MS);
+  });
+  if (timer.unref) timer.unref();
+  try {
+    return await Promise.race([getDb().getConnection(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 任务分发：从池中取一条连接执行业务查询，完成后无条件归还池。
 // onReady 在拿到连接后立即回调——此时主线程的探测计时器即可清零，
 // 不需要（也不再有）额外的 SELECT 1 探活往返。
 async function runTask(task, onReady) {
-  const db = await getDb().getConnection();
+  const db = await acquireDb();
   try {
     onReady();
     switch (task.type) {
@@ -569,7 +606,7 @@ async function runTask(task, onReady) {
 // 这类错误在 worker 内自愈（resetDb + 重试），不外溢成任务失败。
 function isConnectionError(err) {
   const text = `${err?.code || ''} ${err?.message || ''}`;
-  return /closed state|PROTOCOL_CONNECTION_LOST|PROTOCOL_SEQUENCE_TIMEOUT|ECONNRESET|EPIPE|ETIMEDOUT|ER_SERVER_LOST|ECONNREFUSED|ENOTFOUND|ER_ACCESS|connect ETIMEDOUT|Connection lost/i.test(text);
+  return /closed state|PROTOCOL_CONNECTION_LOST|PROTOCOL_SEQUENCE_TIMEOUT|ECONNRESET|EPIPE|ETIMEDOUT|ER_SERVER_LOST|ECONNREFUSED|ENOTFOUND|ER_ACCESS|connect ETIMEDOUT|Connection lost|获取数据库连接超时/i.test(text);
 }
 
 function resetDb() {
@@ -603,7 +640,29 @@ async function announceWhenHealthy() {
 
 announceWhenHealthy();
 
+// 空闲周期保活：低流量时段任务稀疏，池内连接长期不动。
+// 每 60s 对池做一次 SELECT 1（复用池内连接、完成即归还，1 次/分钟对 DB 无压力）：
+//   - 连接健康 → 顺带刷新活跃时间，保持连接热身；
+//   - 连接已被服务端/网络设备静默掐断 → 立刻抛连接级错误，就地 resetDb 剔除死池，
+//     下个任务直接用全新池，不再撞上"假死连接+就绪超时+回退主线程"。
+setInterval(() => {
+  const pool = dbPromise;
+  if (!pool) return;
+  pool.query('SELECT 1').catch((err) => {
+    if (isConnectionError(err)) {
+      console.warn('⚠️ 消息 Worker 空闲保活发现死连接，重建连接池:', err.message);
+      resetDb();
+    }
+  });
+}, 60000).unref?.();
+
 parentPort.on('message', async (task) => {
+  // 主线程控制消息：就绪超时后通知 worker 丢弃可能假死的连接池并重建
+  if (task && task.type === '__resetDb') {
+    console.warn('⚠️ 消息 Worker 收到重建指令，丢弃旧连接池（下次任务按需重建）');
+    resetDb();
+    return;
+  }
   try {
     let result;
     let readySent = false;

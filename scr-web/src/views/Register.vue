@@ -8,7 +8,7 @@
 
     <div class="register-form">
       <button class="theme-toggle" type="button" @click="toggleDarkMode" :title="isDarkMode ? '切换为浅色模式' : '切换为深色模式'">
-        <span class="theme-icon">{{ isDarkMode ? '☀️' : '🌙' }}</span>
+        <span class="theme-icon"><i class="fas" :class="isDarkMode ? 'fa-sun' : 'fa-moon'" aria-hidden="true"></i></span>
       </button>
       <h1>注册聊天室账号</h1>
       <form @submit.prevent="handleRegisterClick">

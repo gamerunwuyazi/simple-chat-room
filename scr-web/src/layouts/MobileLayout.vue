@@ -6,7 +6,7 @@
       <div class="mobile-drawer-panel">
         <div class="mobile-drawer-header">
           <h3>用户列表</h3>
-          <button class="mobile-drawer-close" @click="showUserDrawer = false">✕</button>
+          <button class="mobile-drawer-close" @click="showUserDrawer = false"><i class="fas fa-xmark" aria-hidden="true"></i></button>
         </div>
         <div class="mobile-drawer-body">
           <div class="mobile-drawer-section">
@@ -37,7 +37,7 @@
       <!-- 聊天覆盖层 -->
       <div id="mobile-chat" :class="{ visible: isInChat }">
         <div class="mobile-chat-header">
-          <button class="mobile-back-btn" @click="goBack">← 返回</button>
+          <button class="mobile-back-btn" @click="goBack"><i class="fas fa-arrow-left" aria-hidden="true"></i> 返回</button>
           <span class="mobile-chat-title">{{ chatTitle }}</span>
           <button v-if="isUnifiedChat" class="mobile-user-list-btn" @click="showUserDrawer = true">用户</button>
           <button v-else-if="currentTab === 'group'" class="mobile-header-action" @click="triggerGroupInfo">信息</button>

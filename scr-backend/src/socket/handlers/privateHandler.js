@@ -2,19 +2,36 @@ import { SocketEvents } from '../events.js';
 import path from 'path';
 import fs from 'fs';
 import { redisClient } from '../../models/database.js';
+import {
+  normalizeClientMsgId,
+  isIdempotencyReady,
+  findExistingPrivateMessage,
+  buildReplayPrivateMessage,
+  isDuplicateKeyError
+} from '../../utils/messageIdempotency.js';
 
-export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, validateMessageContent, filterMessageFields, getAllOnlineUsers }) {
+export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, validateMessageContent, filterMessageFields, getAllOnlineUsers, broadcastProducer }) {
   
   // 发送私信
   socket.on(SocketEvents.SEND_PRIVATE_MESSAGE, async (messageData) => {
     try {
-      const { userId, content, receiverId, sessionToken, at_userid } = messageData;
+      const { userId, content, receiverId, sessionToken, at_userid, clientMsgId: rawClientMsgId } = messageData;
+
+      // clientMsgId 是重发幂等键：同一发送者下唯一，落库时写进 client_msg_id。
+      const clientMsgId = normalizeClientMsgId(rawClientMsgId);
+
+      // 与群聊 send-message 对齐：所有 private-message-sent 回执原样回带 clientMsgId，
+      // 前端靠它把回执与本地「发送中」气泡一一对应。
+      const ack = (payload) => socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, {
+        ...payload,
+        clientMsgId: clientMsgId || null
+      });
 
       // 速率限制检查
       const rateLimitResult = await checkRateLimit(userId);
       if (!rateLimitResult.allowed) {
         // 通过 private-message-sent 事件返回速率限制错误
-        socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, { 
+        ack({ 
           success: false,
           error: {
             code: 'RATE_LIMIT_EXCEEDED',
@@ -27,7 +44,7 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
 
       // 验证消息内容
       if (!validateMessageContent(content)) {
-        socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, {
+        ack({
           success: false,
           error: {
             code: 'INVALID_CONTENT',
@@ -58,7 +75,7 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
       );
 
       if (friendCheck.length === 0) {
-        socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, {
+        ack({
           success: false,
           error: {
             code: 'NOT_FRIEND',
@@ -71,7 +88,7 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
       // 检查好友关系状态（允许进入检查流程的状态：好友列表显示或可拉取历史消息的状态）
       const allowedStatuses = [0, 1, 4, 5, 6, 10, 11];
       if (!allowedStatuses.includes(friendCheck[0].status)) {
-        socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, {
+        ack({
           success: false,
           error: {
             code: 'INVALID_FRIEND_STATUS',
@@ -101,7 +118,7 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
           default:
             blockMessage = '无法发送消息';
         }
-        socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, {
+        ack({
           success: false,
           error: {
             code: 'FRIEND_BLOCKED_OR_DELETED',
@@ -121,13 +138,64 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
 
       // 插入私信到数据库
       const messageType = messageData.message_type || messageData.messageType || 0;
-      
+
       const messageContent = cleanContent;
-      
-      const [result] = await pool.execute(
-          'INSERT INTO scr_private_messages (sender_id, receiver_id, content, at_userid, message_type, is_read, timestamp) VALUES (?, ?, ?, ?, ?, 0, NOW())',
-          [userId, receiverId, messageContent, at_userid ? JSON.stringify(at_userid) : null, messageType]
-      );
+
+      // 私聊没有「@全体」语义：at_userid 只保留真实用户 id，
+      // 客户端塞进来的 -1（群聊 @全体 哨兵值）在私聊里会被剔除，
+      // 避免私聊出现假的「@所有人」气泡/提示。
+      const sanitizedAtUserid = Array.isArray(at_userid)
+        ? at_userid.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+        : null;
+      const atUseridPayload = sanitizedAtUserid && sanitizedAtUserid.length > 0
+        ? JSON.stringify(sanitizedAtUserid)
+        : null;
+
+      // 幂等：同一 clientMsgId 已经落库（首包成功但回执丢了，前端重发）时，
+      // 直接回首包那条消息，不再插第二条，也不再广播一次。
+      // 存量库未执行 DDL（client_msg_id 列不存在）时自动降级为「不写幂等键」。
+      const idempotencyReady = clientMsgId ? await isIdempotencyReady('scr_private_messages', pool) : false;
+
+      if (clientMsgId && idempotencyReady) {
+        const existing = await findExistingPrivateMessage(pool, userId, clientMsgId);
+        if (existing) {
+          const replayMessage = filterMessageFields(
+            buildReplayPrivateMessage(existing, user),
+            'private'
+          );
+          replayMessage.clientMsgId = clientMsgId;
+          ack({ success: true, messageId: Number(existing.id), message: replayMessage, duplicate: true });
+          return;
+        }
+      }
+
+      let result;
+      try {
+        // 存量库未执行 DDL 时不写 client_msg_id（否则列不存在会直接报错）
+        const insertSql = idempotencyReady
+          ? 'INSERT INTO scr_private_messages (sender_id, receiver_id, content, at_userid, message_type, is_read, client_msg_id, timestamp) VALUES (?, ?, ?, ?, ?, 0, ?, NOW())'
+          : 'INSERT INTO scr_private_messages (sender_id, receiver_id, content, at_userid, message_type, is_read, timestamp) VALUES (?, ?, ?, ?, ?, 0, NOW())';
+        const insertParams = idempotencyReady
+          ? [userId, receiverId, messageContent, atUseridPayload, messageType, clientMsgId]
+          : [userId, receiverId, messageContent, atUseridPayload, messageType];
+        const [insertResult] = await pool.execute(insertSql, insertParams);
+        result = { insertId: insertResult.insertId };
+      } catch (insertErr) {
+        // 并发重发撞唯一索引：同样按幂等处理，回首包那条
+        if (clientMsgId && idempotencyReady && isDuplicateKeyError(insertErr)) {
+          const existing = await findExistingPrivateMessage(pool, userId, clientMsgId);
+          if (existing) {
+            const replayMessage = filterMessageFields(
+              buildReplayPrivateMessage(existing, user),
+              'private'
+            );
+            replayMessage.clientMsgId = clientMsgId;
+            ack({ success: true, messageId: Number(existing.id), message: replayMessage, duplicate: true });
+            return;
+          }
+        }
+        throw insertErr;
+      }
 
       // 同步"对方收到的我的最大消息id"缓存，供 message-read 已读回执使用（消除每次已读的 DB 查询）
       // 每个会话方向一个键，7 天 TTL 自动回收；fire-and-forget，失败不影响消息发送
@@ -148,6 +216,7 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
         senderId: userId,
         receiverId: parseInt(receiverId),
         content: messageContent,
+        atUserid: sanitizedAtUserid,
         messageType: messageType,
         isRead: 0,
         timestamp: timestampMs,
@@ -169,11 +238,22 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
       // 过滤私信消息字段
       const newMessage = filterMessageFields(rawMessage, 'private');
 
-      // 发送私信给接收者
-      io.to(`user_${parseInt(receiverId)}`).emit(SocketEvents.PRIVATE_MESSAGE_RECEIVED, newMessage);
-
       // 确认私信已发送，只给发送者发送确认事件（不再发送 private-message-received 给发送者）
-      socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, { messageId: result.insertId, message: newMessage });
+      ack({ success: true, messageId: result.insertId, message: newMessage, duplicate: false });
+
+      // 发送私信给接收者：走 Redis Streams 分片扇出（room=user_<id>），
+      // 不在 socket.on 里直接 io.to(...).emit，保证多进程各自只投递本地连接。
+      if (broadcastProducer) {
+        try {
+          await broadcastProducer.enqueue(
+            `user_${parseInt(receiverId)}`,
+            SocketEvents.PRIVATE_MESSAGE_RECEIVED,
+            newMessage
+          );
+        } catch (fanoutErr) {
+          console.error('私信扇出失败:', fanoutErr.message);
+        }
+      }
 
     } catch (err) {
       console.error('❌ 保存私信失败:', err.message);
@@ -286,8 +366,14 @@ export function registerPrivateHandlers(socket, io, { pool, checkRateLimit, vali
       // 发送确认事件给发送者
       socket.emit(SocketEvents.PRIVATE_MESSAGE_SENT, { messageId: type101Message.id, message: type101Message });
       
-      // 只给接收者发送消息接收事件
-      io.to(`user_${message.receiver_id}`).emit(SocketEvents.PRIVATE_MESSAGE_RECEIVED, type101Message);
+      // 只给接收者发送消息接收事件（Redis Streams 分片扇出，不直接 io.to）
+      if (broadcastProducer) {
+        await broadcastProducer.enqueue(
+          `user_${message.receiver_id}`,
+          SocketEvents.PRIVATE_MESSAGE_RECEIVED,
+          type101Message
+        );
+      }
       
     } catch (err) {
       console.error('❌ 撤回私信失败:', err.message);

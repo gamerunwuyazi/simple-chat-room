@@ -64,7 +64,7 @@
           target="_blank"
           style="color: #3498db; text-decoration: none;"
         >
-          <span class="file-icon">{{ fileIcon }}</span>
+          <span class="file-icon"><i class="fas" :class="fileIcon" aria-hidden="true"></i></span>
           <span>{{ displayFilename }}</span>
         </a>
       </div>
@@ -130,6 +130,7 @@ import { useFriendStore } from '@/stores/friendStore';
 import { useModalStore } from '@/stores/modalStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useInputStore } from '@/stores/inputStore';
+import { getFileIconClass } from '@/utils/fileIcon';
 import { useFavoriteStore } from '@/stores/favoriteStore';
 import { showGroupCardPopup, getChatSocket } from '@/utils/chat';
 import { formatMessageTime } from '@/utils/chat/message.js';
@@ -610,31 +611,7 @@ const fullFileUrl = computed(() => {
 
 const displayFilename = computed(() => filename.value || '文件');
 
-const fileExtension = computed(() => displayFilename.value.split('.').pop().toLowerCase());
-
-const fileIcon = computed(() => {
-  let icon = '📄';
-  if (/^(pdf|doc|docx|txt|rtf)$/i.test(fileExtension.value)) {
-    icon = '📝';
-  } else if (/^(xls|xlsx|csv)$/i.test(fileExtension.value)) {
-    icon = '📊';
-  } else if (/^(zip|rar|7z|tar|gz)$/i.test(fileExtension.value)) {
-    icon = '🗜️';
-  } else if (/^(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileExtension.value)) {
-    icon = '🖼️';
-  } else if (/^(mp3|wav|ogg|flac)$/i.test(fileExtension.value)) {
-    icon = '🎵';
-  } else if (/^(mp4|avi|mov|wmv|flv)$/i.test(fileExtension.value)) {
-    icon = '🎬';
-  } else if (/^(exe|dll|bat|sh)$/i.test(fileExtension.value)) {
-    icon = '⚙️';
-  } else if (/^(ppt|pptx)$/i.test(fileExtension.value)) {
-    icon = '📋';
-  } else if (/^(js|ts|html|css|php|py|java|c|cpp|cs|go|rb|swift|kt)$/i.test(fileExtension.value)) {
-    icon = '💻';
-  }
-  return icon;
-});
+const fileIcon = computed(() => getFileIconClass(displayFilename.value));
 
 const groupCardAvatarUrl = computed(() => {
   if (groupCardAvatarLoadFailed.value) return '';
@@ -798,29 +775,9 @@ const parsedContent = computed(() => {
     }
 
     if (hasDownloadAttr || (!isHttpLink && hasFileExtension)) {
-      const fileExt = href.split('.').pop().toLowerCase();
-      let icon = '📄';
-      if (/^(pdf|doc|docx|txt|rtf)$/i.test(fileExt)) {
-        icon = '📝';
-      } else if (/^(xls|xlsx|csv)$/i.test(fileExt)) {
-        icon = '📊';
-      } else if (/^(zip|rar|7z|tar|gz)$/i.test(fileExt)) {
-        icon = '🗜️';
-      } else if (/^(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileExt)) {
-        icon = '🖼️';
-      } else if (/^(mp3|wav|ogg|flac)$/i.test(fileExt)) {
-        icon = '🎵';
-      } else if (/^(mp4|avi|mov|wmv|flv)$/i.test(fileExt)) {
-        icon = '🎬';
-      } else if (/^(exe|dll|bat|sh)$/i.test(fileExt)) {
-        icon = '⚙️';
-      } else if (/^(ppt|pptx)$/i.test(fileExt)) {
-        icon = '📋';
-      } else if (/^(js|ts|html|css|php|py|java|c|cpp|cs|go|rb|swift|kt)$/i.test(fileExt)) {
-        icon = '💻';
-      }
+      const icon = getFileIconClass(href);
 
-      return `<div class="file-link-container"><a${attr1} ${hrefAttr}${attr2} class="file-link" target="_blank"><span class="file-icon">${icon}</span><span>${text}</span></a></div>`;
+      return `<div class="file-link-container"><a${attr1} ${hrefAttr}${attr2} class="file-link" target="_blank"><span class="file-icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span>${text}</span></a></div>`;
     }
 
     return match;

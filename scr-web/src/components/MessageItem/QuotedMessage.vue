@@ -30,7 +30,7 @@
         target="_blank"
         @click.stop
       >
-        <span class="quoted-message-file-icon quoted-file-icon">{{ fileIcon }}</span>
+        <span class="quoted-message-file-icon quoted-file-icon"><i class="fas" :class="fileIcon" aria-hidden="true"></i></span>
         <span class="quoted-file-name">{{ displayFilename }}</span>
       </a>
     </div>
@@ -76,6 +76,7 @@ import { marked } from 'marked';
 import { computed, ref, onMounted, onUnmounted } from 'vue';
 
 import { useMessageHighlight } from '@/composables/useMessageHighlight';
+import { getFileIconClass } from '@/utils/fileIcon';
 import { useBaseStore } from '@/stores/baseStore';
 import { useFriendStore } from '@/stores/friendStore';
 import { useGroupStore } from '@/stores/groupStore';
@@ -348,33 +349,7 @@ const fullFileUrl = computed(() => {
 
 const displayFilename = computed(() => filename.value || '文件');
 
-const fileIcon = computed(() => {
-  if (!filename.value) return '📄';
-  const ext = filename.value.split('.').pop()?.toLowerCase() || '';
-  const extIcons = {
-    pdf: '📕',
-    doc: '📘',
-    docx: '📘',
-    xls: '📗',
-    xlsx: '📗',
-    ppt: '📙',
-    pptx: '📙',
-    zip: '📦',
-    rar: '📦',
-    '7z': '📦',
-    mp3: '🎵',
-    mp4: '🎬',
-    avi: '🎬',
-    mov: '🎬',
-    jpg: '🖼️',
-    jpeg: '🖼️',
-    png: '🖼️',
-    gif: '🖼️',
-    bmp: '🖼️',
-    webp: '🖼️'
-  };
-  return extIcons[ext] || '📄';
-});
+const fileIcon = computed(() => getFileIconClass(filename.value));
 
 const groupCardAvatarUrl = computed(() => {
   if (!groupCardData.value?.avatar_url) return '';

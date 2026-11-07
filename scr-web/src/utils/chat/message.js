@@ -1,13 +1,11 @@
-import { toast } from './config.js';
 import {
   useBaseStore,
   useSessionStore,
-  useDraftStore,
   useInputStore,
   getChatSocket
 } from '@/stores/index.js';
+import { sendTracked } from './messageStatus.js';
 
-const _messageSendTimeouts = {};
 let _lastMessageSendTime = 0;
 
 export function escapeHtml(text) {
@@ -21,15 +19,6 @@ export function unescapeHtml(html) {
   const text = document.createElement('textarea');
   text.innerHTML = html;
   return text.value;
-}
-
-function setCursorToEnd(element) {
-  const range = document.createRange();
-  const sel = window.getSelection();
-  range.selectNodeContents(element);
-  range.collapse(false);
-  sel.removeAllRanges();
-  sel.addRange(range);
 }
 
 export function formatFileSize(bytes) {
@@ -89,7 +78,6 @@ export function sendMessage() {
   
   const baseStore = useBaseStore();
   const sessionStore = useSessionStore();
-  const draftStore = useDraftStore();
   const currentUser = baseStore.currentUser;
   const currentSessionToken = baseStore.currentSessionToken;
   const chatSocket = getChatSocket();
@@ -156,52 +144,16 @@ export function sendMessage() {
     
     clearContentEditable(messageInput);
     
-    const failedContent = content;
-    const timeoutKey = 'sendMessage_' + Date.now();
-    const sendTime = Date.now();
+    _lastMessageSendTime = Date.now();
     
-    _lastMessageSendTime = sendTime;
-    
-    _messageSendTimeouts[timeoutKey] = setTimeout(() => {
-      const input = document.getElementById('messageInput');
-      if (input) {
-        input.innerHTML = failedContent;
-        setCursorToEnd(input);
-      }
-      toast.error('消息发送超时，请检查网络后重试');
-      delete _messageSendTimeouts[timeoutKey];
-    }, 5000);
-    
-    const messageSentHandler = (data) => {
-      if (data.success === false && data.error) {
-        const timeout = _messageSendTimeouts[timeoutKey];
-        if (timeout) {
-          clearTimeout(timeout);
-          delete _messageSendTimeouts[timeoutKey];
-        }
-        chatSocket.off('message-sent', messageSentHandler);
-        
-        const input = document.getElementById('messageInput');
-        if (input) {
-          input.innerHTML = failedContent;
-          setCursorToEnd(input);
-        }
-        // 错误提示由 websocket.js 全局 message-sent handler 统一弹出，避免与这里重复弹两次
-        return;
-      }
-      
-      if (data.message && data.messageId) {
-        const timeout = _messageSendTimeouts[timeoutKey];
-        if (timeout) {
-          clearTimeout(timeout);
-          delete _messageSendTimeouts[timeoutKey];
-        }
-        chatSocket.off('message-sent', messageSentHandler);
-      }
-    };
-    chatSocket.on('message-sent', messageSentHandler);
-    
-    chatSocket.emit('send-message', messageData);
+    // 输入框已清空，失败不再回填；气泡保留在列表尾部，点图标用同一 clientMsgId 重发
+    sendTracked({
+      scope: 'group',
+      targetId: groupId,
+      payload: messageData,
+      content,
+      messageType: messageData.messageType || 0
+    });
     
     if (quotedMessage) {
       inputStore?.clearQuotedMessage();
@@ -212,7 +164,6 @@ export function sendMessage() {
 export function sendGroupMessage() {
   const sessionStore = useSessionStore();
   const baseStore = useBaseStore();
-  const draftStore = useDraftStore();
   
   const currentGroupId = sessionStore.currentGroupId;
   if (!currentGroupId) {
@@ -311,65 +262,13 @@ export function sendGroupMessage() {
       clearContentEditable(groupMessageInput);
     }
     
-    const failedContent = content;
-    const timeoutKey = 'sendGroupMessage_' + Date.now();
-    
-    _messageSendTimeouts[timeoutKey] = setTimeout(() => {
-      const input = document.getElementById('groupMessageInput');
-      if (input) {
-        if (input.tagName === 'TEXTAREA') {
-          input.value = failedContent;
-          input.focus();
-          input.setSelectionRange(failedContent.length, failedContent.length);
-        } else {
-          input.innerHTML = failedContent;
-          setCursorToEnd(input);
-        }
-      }
-      toast.error('消息发送超时，请检查网络后重试');
-      delete _messageSendTimeouts[timeoutKey];
-    }, 5000);
-    
-    const messageSentHandler = (data) => {
-      if (data.success === false && data.error) {
-        const timeout = _messageSendTimeouts[timeoutKey];
-        if (timeout) {
-          clearTimeout(timeout);
-          delete _messageSendTimeouts[timeoutKey];
-        }
-        chatSocket.off('message-sent', messageSentHandler);
-        
-        const input = document.getElementById('groupMessageInput');
-        if (input) {
-          if (input.tagName === 'TEXTAREA') {
-            input.value = failedContent;
-            input.focus();
-            input.setSelectionRange(failedContent.length, failedContent.length);
-          } else {
-            input.innerHTML = failedContent;
-            setCursorToEnd(input);
-          }
-        }
-        // 错误提示由 websocket.js 全局 message-sent handler 统一弹出，避免重复弹两次
-        return;
-      }
-      
-      if (data.message && data.messageId && String(data.message.groupId) === String(currentGroupId)) {
-        const timeout = _messageSendTimeouts[timeoutKey];
-        if (timeout) {
-          clearTimeout(timeout);
-          delete _messageSendTimeouts[timeoutKey];
-        }
-        chatSocket.off('message-sent', messageSentHandler);
-        
-        if (draftStore && draftStore.clearDraft) {
-          draftStore.clearDraft('group', currentGroupId);
-        }
-      }
-    };
-    chatSocket.on('message-sent', messageSentHandler);
-    
-    chatSocket.emit('send-message', messageData);
+    sendTracked({
+      scope: 'group',
+      targetId: currentGroupId,
+      payload: messageData,
+      content,
+      messageType: messageData.messageType || 0
+    });
     
     if (quotedMessage) {
       inputStore?.clearQuotedMessage();
@@ -380,7 +279,6 @@ export function sendGroupMessage() {
 export function sendPrivateMessage() {
   const baseStore = useBaseStore();
   const sessionStore = useSessionStore();
-  const draftStore = useDraftStore();
   
   const currentUser = baseStore.currentUser;
   const currentSessionToken = baseStore.currentSessionToken;
@@ -462,53 +360,13 @@ export function sendPrivateMessage() {
   if (chatSocket) {
     clearContentEditable(privateMessageInput);
     
-    const failedContent = content;
-    const timeoutKey = 'sendPrivateMessage_' + Date.now();
-    
-    _messageSendTimeouts[timeoutKey] = setTimeout(() => {
-      const input = document.getElementById('privateMessageInput');
-      if (input) {
-        input.innerHTML = failedContent;
-        setCursorToEnd(input);
-      }
-      toast.error('消息发送超时，请检查网络后重试');
-      delete _messageSendTimeouts[timeoutKey];
-    }, 5000);
-    
-    const privateMessageSentHandler = (data) => {
-      if (data.success === false && data.error) {
-        const timeout = _messageSendTimeouts[timeoutKey];
-        if (timeout) {
-          clearTimeout(timeout);
-          delete _messageSendTimeouts[timeoutKey];
-        }
-        chatSocket.off('private-message-sent', privateMessageSentHandler);
-        
-        const input = document.getElementById('privateMessageInput');
-        if (input) {
-          input.innerHTML = failedContent;
-          setCursorToEnd(input);
-        }
-        // 错误提示由 websocket.js 全局 private-message-sent handler 统一弹出，避免重复弹两次
-        return;
-      }
-      
-      if (data.message && data.messageId) {
-        const timeout = _messageSendTimeouts[timeoutKey];
-        if (timeout) {
-          clearTimeout(timeout);
-          delete _messageSendTimeouts[timeoutKey];
-        }
-        chatSocket.off('private-message-sent', privateMessageSentHandler);
-        
-        if (draftStore && draftStore.clearDraft) {
-          draftStore.clearDraft('private', currentPrivateChatUserId);
-        }
-      }
-    };
-    chatSocket.on('private-message-sent', privateMessageSentHandler);
-    
-    chatSocket.emit('send-private-message', messageData);
+    sendTracked({
+      scope: 'private',
+      targetId: currentPrivateChatUserId,
+      payload: messageData,
+      content,
+      messageType: messageData.message_type || 0
+    });
 
     if (quotedMessage) {
       inputStore?.clearQuotedMessage();

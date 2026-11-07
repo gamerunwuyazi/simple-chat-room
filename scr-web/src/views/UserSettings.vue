@@ -8,6 +8,8 @@ import { currentSessionToken } from "@/utils/chat";
 import modal from "@/utils/modal";
 import { updateNickname, updateSignature, updateGender, changePassword } from '@/api/user.js';
 import { uploadAvatar } from '@/api/upload.js';
+import { updateTypingSetting } from '@/api/groupFeatures.js';
+import { setTypingSetting, typingSetting } from '@/utils/chat/typing.js';
 import { humanVerify } from 'human-verify';
 
 const baseStore = useBaseStore();
@@ -72,6 +74,10 @@ const friendVerificationEnabled = ref(false)
 const friendRequestMessage = ref('')
 const friendRequestMessageClass = ref('')
 
+const typingEnabled = ref(true)
+const typingMessage = ref('')
+const typingMessageClass = ref('')
+
 // copyright 显示的当前年份（前端实时获取）
 const currentYear = new Date().getFullYear()
 
@@ -113,6 +119,30 @@ function handleSettingClick(setting) {
     }
   } else if (setting === 'friend-verification') {
     friendVerificationEnabled.value = baseStore.friendVerification
+  } else if (setting === 'typing-setting') {
+    typingEnabled.value = typingSetting.value
+    typingMessage.value = ''
+  }
+}
+
+async function handleToggleTypingSetting() {
+  typingMessage.value = ''
+  const enabled = typingEnabled.value
+
+  // 本地立即生效：发送与显示都读同一份状态
+  setTypingSetting(enabled)
+  if (baseStore.currentUser) {
+    baseStore.currentUser.show_typing = enabled ? 1 : 0
+  }
+
+  try {
+    // 同步到后端：PUT /api/user/settings/typing（由 api 层 updateTypingSetting 封装）
+    await updateTypingSetting(enabled)
+    typingMessage.value = enabled ? '已开启，对方可以看到你正在输入' : '已关闭，不会再发送输入状态'
+    typingMessageClass.value = 'success'
+  } catch (err) {
+    typingMessage.value = err?.message || '同步到服务器失败，已在本机生效'
+    typingMessageClass.value = 'error'
   }
 }
 
@@ -593,6 +623,26 @@ onUnmounted(() => {
             <p class="toggle-description">
               {{ friendVerificationEnabled ? '开启后，他人添加你为好友时需要经过你的同意' : '关闭后，他人可以直接添加你为好友' }}
             </p>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="currentSetting === 'typing-setting'" class="settings-detail">
+        <h2>正在输入提示</h2>
+
+        <div class="friend-verification-section">
+          <div class="verification-toggle">
+            <label class="toggle-label">
+              <span>显示自己正在输入</span>
+              <label class="switch">
+                <input type="checkbox" v-model="typingEnabled" @change="handleToggleTypingSetting">
+                <span class="slider round"></span>
+              </label>
+            </label>
+            <p class="toggle-description">
+              {{ typingEnabled ? '开启后，对方能看到你正在输入；同时你也能看到对方的输入提示' : '关闭后不会发送输入状态，也看不到对方的输入提示' }}
+            </p>
+            <p v-if="typingMessage" class="toggle-description" :class="typingMessageClass">{{ typingMessage }}</p>
           </div>
         </div>
       </div>

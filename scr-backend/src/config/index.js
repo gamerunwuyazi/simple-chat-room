@@ -60,13 +60,18 @@ export const dbConfig = {
   // 注意：mysql2 仅在 maxIdle < connectionLimit 时才启动空闲回收器（base/pool.js），
   // maxIdle 只负责「空闲数超过即裁剪」，超过 idleTimeout 的连接无论数量都会被关闭
   maxIdle: parseInt(process.env.DB_MAX_IDLE) || 100,
-  // 空闲 1 小时后由客户端主动断开（远早于 MySQL wait_timeout 默认 8h，杜绝僵尸连接）
-  idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT) || 3600000,
+  // 空闲 60s 后由客户端主动断开（远早于 MySQL wait_timeout 默认 8h）。
+  // 这是防「空闲连接假死」的第一条腿：连接根本不会闲置到被服务端/网络设备单方面掐断。
+  // 网络设备/NAT 的空闲回收通常在几分钟量级，60s 回收让僵尸连接无从产生；
+  // localhost 场景重建连接仅毫秒级，代价可忽略。
+  idleTimeout: parseInt(process.env.DB_IDLE_TIMEOUT) || 60000,
   // 连接超时调快（默认 10s）：MySQL 不可达时新连接 3s 即失败，
   // 避免 HTTP 请求在建立连接阶段长时间挂起后才报错
   connectTimeout: parseInt(process.env.DB_CONNECT_TIMEOUT) || 3000,
+  // TCP 层保活：对端（MySQL/中间网络设备）静默丢弃连接时，keepalive 探测
+  // 能让本端感知死连接而不是把查询挂到天荒地老。每 10s 一个探测周期。
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0
+  keepAliveInitialDelay: 10000
 };
 
 // ============================================

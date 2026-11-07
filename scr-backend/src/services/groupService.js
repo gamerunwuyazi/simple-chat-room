@@ -536,6 +536,15 @@ export async function getGroupMembers(req, res) {
   try {
     const groupId = req.params.groupId;
 
+    const [groups] = await pool.execute(
+      'SELECT creator_id FROM scr_groups WHERE id = ? AND deleted_at IS NULL',
+      [groupId]
+    );
+    if (groups.length === 0) {
+      return res.status(404).json({ status: 'error', message: '群组不存在' });
+    }
+    const ownerId = Number(groups[0].creator_id);
+
     const [members] = await pool.execute(`
       SELECT u.id, u.nickname, u.avatar_url as avatarUrl, gm.is_admin, DATE_FORMAT(gm.is_muted, '%Y-%m-%d %H:%i:%s') AS is_muted, gm.group_nickname
       FROM scr_group_members gm
@@ -543,15 +552,22 @@ export async function getGroupMembers(req, res) {
       WHERE gm.group_id = ? AND gm.deleted_at IS NULL
     `, [groupId]);
 
-    // 确保所有ID字段都是数字格式
-    const normalizedMembers = members.map(member => ({
-      id: Number(member.id),
-      nickname: member.nickname,
-      avatarUrl: member.avatarUrl,
-      is_admin: Number(member.is_admin),
-      is_muted: member.is_muted,
-      group_nickname: member.group_nickname
-    }));
+    // 角色徽标口径：群主 > 管理员 > 普通成员。
+    // is_owner 单独给一个布尔值，前端不必再拿 creator_id 去比。
+    const normalizedMembers = members.map(member => {
+      const isOwner = Number(member.id) === ownerId;
+      const isAdmin = Number(member.is_admin) === 1;
+      return {
+        id: Number(member.id),
+        nickname: member.nickname,
+        avatarUrl: member.avatarUrl,
+        is_admin: Number(member.is_admin),
+        is_owner: isOwner,
+        role: isOwner ? 'owner' : (isAdmin ? 'admin' : 'member'),
+        is_muted: member.is_muted,
+        group_nickname: member.group_nickname
+      };
+    });
 
     res.json({
       status: 'success',

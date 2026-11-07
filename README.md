@@ -92,6 +92,10 @@ npm run server
 
 后端默认监听端口 **3000**。
 
+#### 多实例连接数预算
+
+多实例部署时，各实例启动时会通过 Redis（`scr:instances`，心跳 60s TTL，崩溃自动出列）感知存活实例数 N，并把 `max_connections - DB_CONN_RESERVE` 的连接预算均摊：N=1 维持默认大池（主池 150 + worker 8），N≥2 时每实例 = `floor(预算/N)`（下限主池 20 / worker 2），显式设置的 `DB_CONNECTION_LIMIT` / `WORKER_DB_CONNECTION_LIMIT` 会被 clamp 到预算内并告警。池限额只在启动时计算（mysql2 池不可热改），运行中扩容实例后需滚动重启以重新分配；相关配置见 `.env.example` 的「多实例连接数预算」段。
+
 ### 5. 启动前端（开发模式）
 
 ```bash

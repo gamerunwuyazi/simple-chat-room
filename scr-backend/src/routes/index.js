@@ -3,6 +3,7 @@ import { setupRoutes as setupAdminRoutes } from './admin.js';
 import { setupRoutes as setupUserRoutes } from './user.js';
 import { setupRoutes as setupFriendRoutes } from './friend.js';
 import { setupRoutes as setupGroupRoutes } from './group.js';
+import { setupRoutes as setupGroupFeatureRoutes } from './groupFeature.js';
 import { setupRoutes as setupMessageRoutes } from './message.js';
 import { setupRoutes as setupFileRoutes } from './file.js';
 import { setupVerifyRoutes } from './verify.js';
@@ -15,6 +16,7 @@ export function setupAllRoutes(app, io, broadcastProducer) {
   setupFriendRoutes(app, io);
   // group 必须先于 user 注册：/api/user/groups 需要先于 /api/user/:id 匹配
   setupGroupRoutes(app, io);
+  setupGroupFeatureRoutes(app);
   setupUserRoutes(app, io);
   setupMessageRoutes(app, io);
   setupFileRoutes(app, io);

@@ -10,7 +10,7 @@
   </div>
   <div 
     v-else
-    :class="['message', isOwn ? 'own-message' : 'other-message', { 'active': isActive }]"
+    :class="['message', isOwn ? 'own-message' : 'other-message', { 'active': isActive, 'is-mention-me': isMentionMe }]"
     :data-id="message.id"
     :data-identifier="messageIdentifier"
     @contextmenu="handleContextMenu"
@@ -20,7 +20,7 @@
       <span v-else class="msg-avatar-initials">{{ senderInitials }}</span>
     </div>
     <div class="msg-body">
-      <div v-if="!isOwn" class="msg-sender-name">{{ senderNickname }} <span class="msg-time">{{ messageTime }}</span></div>
+      <div v-if="!isOwn" class="msg-sender-name">{{ senderNickname }}<RoleBadge :role="senderRole" /> <span class="msg-time">{{ messageTime }}</span></div>
       <div class="msg-bubble">
         <div class="msg-bubble-content" v-scroll-padding>
       <div v-if="systemMessage" class="system-message-container" :class="systemMessageType">
@@ -64,7 +64,7 @@
           target="_blank"
           style="color: #3498db; text-decoration: none;"
         >
-          <span class="file-icon">{{ fileIcon }}</span>
+          <span class="file-icon"><i class="fas" :class="fileIcon" aria-hidden="true"></i></span>
           <span>{{ displayFilename }}</span>
         </a>
       </div>
@@ -98,6 +98,12 @@
           点击查看群组详情
         </div>
       </div>
+      <div v-else-if="chainPayload" class="feature-message-container">
+        <ChainMessage :payload="chainPayload" :message-type="props.message.messageType" />
+      </div>
+      <div v-else-if="votePayload" class="feature-message-container">
+        <VoteMessage :payload="votePayload" />
+      </div>
       <div v-else-if="parsedContent && !(imageUrl || fileUrl || groupCardData || quotedMessageData)" v-html="parsedContent" class="message-text"></div>
       <template v-else-if="quotedMessageData">
         <div v-if="quotedMessageData.text" class="message-text">
@@ -118,6 +124,10 @@ import { marked } from 'marked';
 import { computed, ref, onMounted } from 'vue';
 
 import QuotedMessage from './QuotedMessage.vue';
+import RoleBadge from './RoleBadge.vue';
+import ChainMessage from '@/components/GroupFeature/ChainMessage.vue';
+import VoteMessage from '@/components/GroupFeature/VoteMessage.vue';
+import { highlightMentions } from '@/utils/chat/mention.js';
 
 import { useBaseStore } from '@/stores/baseStore';
 import { useUserStore } from '@/stores/userStore';
@@ -126,6 +136,7 @@ import { useFriendStore } from '@/stores/friendStore';
 import { useModalStore } from '@/stores/modalStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useInputStore } from '@/stores/inputStore';
+import { getFileIconClass } from '@/utils/fileIcon';
 import { useFavoriteStore } from '@/stores/favoriteStore';
 import { openUserAvatarPopup } from '@/stores/index.js';
 import { showGroupCardPopup, getChatSocket } from '@/utils/chat';
@@ -143,6 +154,11 @@ const props = defineProps({
   isOwn: {
     type: Boolean,
     default: false
+  },
+  // 群主 ID（由会话层传入），用于角色徽标判定；缺省时只按 is_admin 显示管理员
+  groupCreatorId: {
+    type: [Number, String],
+    default: null
   }
 });
 
@@ -227,8 +243,21 @@ const senderNickname = computed(() => {
   if (friend) return friend.nickname || messageUser.value.nickname;
   return messageUser.value.nickname || '未知用户';
 });
-const senderInitials = computed(() => senderNickname.value ? senderNickname.value.charAt(0).toUpperCase() : 'U');
-const senderAvatarUrl = computed(() => messageUser.value.avatarUrl);
+// 角色徽标：群主 > 管理员 > 无
+const senderRole = computed(() => {
+  const messageUserId = String(props.message.userId ?? '');
+  if (!messageUserId) return '';
+  if (props.groupCreatorId !== null && props.groupCreatorId !== undefined && props.groupCreatorId !== ''
+    && String(props.groupCreatorId) === messageUserId) {
+    return 'owner';
+  }
+  const members = groupStore.currentGroupMembers || [];
+  const member = members.find(m => String(m.id) === messageUserId);
+  if (member && Number(member.is_admin) > 0) return 'admin';
+  return '';
+});
+
+const senderInitials = computed(() => senderNickname.value ? senderNickname.value.charAt(0).toUpperCase() : 'U');const senderAvatarUrl = computed(() => messageUser.value.avatarUrl);
 
 const isSvgAvatar = computed(() => {
   if (!senderAvatarUrl.value) return false;
@@ -278,6 +307,8 @@ const messageData = computed(() => {
   let textContent = props.message.content;
   let groupCardData = null;
   let quotedMessageData = null;
+  let chainPayload = null;
+  let votePayload = null;
   let width = props.message.width;
   let height = props.message.height;
   let systemMessage = null;
@@ -370,6 +401,31 @@ const messageData = computed(() => {
           }
         } catch (error) {}
         break;
+      case 8:
+      case 9:
+        // 接龙头 / 参与接龙：content 为 { chainId, title, content, entryId? }（契约第 2 节）
+        try {
+          const chainData = JSON.parse(props.message.content);
+          if (chainData && chainData.chainId) {
+            chainPayload = chainData;
+            textContent = '';
+          }
+        } catch (error) {
+          console.error('解析接龙消息JSON失败:', error);
+        }
+        break;
+      case 10:
+        // 投票：content 为 { voteId, title, description, multiple, anonymous, endsAt, options }
+        try {
+          const voteData = JSON.parse(props.message.content);
+          if (voteData && voteData.voteId && Array.isArray(voteData.options)) {
+            votePayload = voteData;
+            textContent = '';
+          }
+        } catch (error) {
+          console.error('解析投票消息JSON失败:', error);
+        }
+        break;
       case 100: {
         // 系统消息 - content为JSON格式：{userId: nickname, action: "..."}
         let sysContent;
@@ -449,7 +505,7 @@ const messageData = computed(() => {
     }  // end else (非撤回消息的switch)
   }
 
-  return { imageUrl, fileUrl, filename, textContent, groupCardData, quotedMessageData, width, height, systemMessage };
+  return { imageUrl, fileUrl, filename, textContent, groupCardData, quotedMessageData, chainPayload, votePayload, width, height, systemMessage };
 });
 
 const systemMessage = computed(() => messageData.value.systemMessage);
@@ -480,6 +536,8 @@ const filename = computed(() => messageData.value.filename);
 const textContent = computed(() => messageData.value.textContent);
 const groupCardData = computed(() => messageData.value.groupCardData);
 const quotedMessageData = computed(() => messageData.value.quotedMessageData);
+const chainPayload = computed(() => messageData.value.chainPayload);
+const votePayload = computed(() => messageData.value.votePayload);
 const imageWidth = computed(() => messageData.value.width);
 const imageHeight = computed(() => messageData.value.height);
 
@@ -605,31 +663,7 @@ const fullFileUrl = computed(() => {
 
 const displayFilename = computed(() => filename.value || '文件');
 
-const fileExtension = computed(() => displayFilename.value.split('.').pop().toLowerCase());
-
-const fileIcon = computed(() => {
-  let icon = '📄';
-  if (/^(pdf|doc|docx|txt|rtf)$/i.test(fileExtension.value)) {
-    icon = '📝';
-  } else if (/^(xls|xlsx|csv)$/i.test(fileExtension.value)) {
-    icon = '📊';
-  } else if (/^(zip|rar|7z|tar|gz)$/i.test(fileExtension.value)) {
-    icon = '🗜️';
-  } else if (/^(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileExtension.value)) {
-    icon = '🖼️';
-  } else if (/^(mp3|wav|ogg|flac)$/i.test(fileExtension.value)) {
-    icon = '🎵';
-  } else if (/^(mp4|avi|mov|wmv|flv)$/i.test(fileExtension.value)) {
-    icon = '🎬';
-  } else if (/^(exe|dll|bat|sh)$/i.test(fileExtension.value)) {
-    icon = '⚙️';
-  } else if (/^(ppt|pptx)$/i.test(fileExtension.value)) {
-    icon = '📋';
-  } else if (/^(js|ts|html|css|php|py|java|c|cpp|cs|go|rb|swift|kt)$/i.test(fileExtension.value)) {
-    icon = '💻';
-  }
-  return icon;
-});
+const fileIcon = computed(() => getFileIconClass(displayFilename.value));
 
 const groupCardAvatarUrl = computed(() => {
   if (groupCardAvatarLoadFailed.value) return '';
@@ -677,6 +711,37 @@ function escapeHtmlForMarkdown(str) {
     .replace(/'/g, '&#39;');
 }
 
+// @气泡：可被 @ 的昵称集合（群昵称优先），以及当前用户自己的昵称
+const mentionNicknames = computed(() => {
+  const names = [];
+  (groupStore.currentGroupMembers || []).forEach((member) => {
+    if (member.group_nickname) names.push(member.group_nickname);
+    if (member.nickname) names.push(member.nickname);
+  });
+  return names;
+});
+
+const selfNicknames = computed(() => {
+  const names = [];
+  const current = baseStore.currentUser;
+  if (current) {
+    if (current.nickname) names.push(current.nickname);
+    if (current.username) names.push(current.username);
+  }
+  const selfMember = (groupStore.currentGroupMembers || []).find(
+    (member) => String(member.id) === String(current?.id ?? '')
+  );
+  if (selfMember?.group_nickname) names.push(selfMember.group_nickname);
+  return names;
+});
+
+function applyMentionHighlight(html) {
+  return highlightMentions(html, {
+    nicknames: mentionNicknames.value,
+    selfNicknames: selfNicknames.value
+  });
+}
+
 const parsedContent = computed(() => {
   if (!textContent.value) return '';
 
@@ -690,7 +755,7 @@ const parsedContent = computed(() => {
     escapedContent = escapedContent.replace(urlRegex, (url) => {
       return `<a href="${url}" class="message-link" target="_blank" rel="noopener noreferrer" style="color: #3498db; text-decoration: none;">${url}</a>`;
     });
-    return `<p>${escapedContent}</p>`;
+    return `<p>${applyMentionHighlight(escapedContent)}</p>`;
   }
 
   let contentToParse = escapeHtml(textContent.value);
@@ -791,35 +856,23 @@ const parsedContent = computed(() => {
     }
 
     if (hasDownloadAttr || (!isHttpLink && hasFileExtension)) {
-      const fileExt = href.split('.').pop().toLowerCase();
-      let icon = '📄';
-      if (/^(pdf|doc|docx|txt|rtf)$/i.test(fileExt)) {
-        icon = '📝';
-      } else if (/^(xls|xlsx|csv)$/i.test(fileExt)) {
-        icon = '📊';
-      } else if (/^(zip|rar|7z|tar|gz)$/i.test(fileExt)) {
-        icon = '🗜️';
-      } else if (/^(jpg|jpeg|png|gif|bmp|webp)$/i.test(fileExt)) {
-        icon = '🖼️';
-      } else if (/^(mp3|wav|ogg|flac)$/i.test(fileExt)) {
-        icon = '🎵';
-      } else if (/^(mp4|avi|mov|wmv|flv)$/i.test(fileExt)) {
-        icon = '🎬';
-      } else if (/^(exe|dll|bat|sh)$/i.test(fileExt)) {
-        icon = '⚙️';
-      } else if (/^(ppt|pptx)$/i.test(fileExt)) {
-        icon = '📋';
-      } else if (/^(js|ts|html|css|php|py|java|c|cpp|cs|go|rb|swift|kt)$/i.test(fileExt)) {
-        icon = '💻';
-      }
+      const icon = getFileIconClass(href);
 
-      return `<div class="file-link-container"><a${attr1} ${hrefAttr}${attr2} class="file-link" target="_blank"><span class="file-icon">${icon}</span><span>${text}</span></a></div>`;
+      return `<div class="file-link-container"><a${attr1} ${hrefAttr}${attr2} class="file-link" target="_blank"><span class="file-icon"><i class="fas ${icon}" aria-hidden="true"></i></span><span>${text}</span></a></div>`;
     }
 
     return match;
   });
 
   return DOMPurify.sanitize(parsed);
+});
+
+// 气泡级 @我 标识：与 UnifiedMessageItem 同口径——只认 mention.js 生成的
+// class="at-mention at-mention-self"（自己被 @），普通 @ 是 at-mention，不会误伤；
+// 用完整 class 串而不是 "at-mention-self" 子串，避免用户正文里恰好出现该字样被误判
+const isMentionMe = computed(() => {
+  const html = parsedContent.value;
+  return typeof html === 'string' && html.includes('at-mention at-mention-self');
 });
 
 function handleAvatarClick(event) {
@@ -1077,6 +1130,25 @@ function hideContextMenu() {
 .message-text {
   white-space: pre-wrap;
 }
+
+/* @气泡：v-html 内容不带 scoped 属性，需用 :deep 穿透 */
+.message-text :deep(.at-mention) {
+  display: inline;
+  padding: 0 3px;
+  margin: 0 1px;
+  border-radius: 4px;
+  color: #1d4ed8;
+  background: #e8f0ff;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.message-text :deep(.at-mention-self) {
+  color: #b45309;
+  background: #fff4e0;
+}
+
+/* 整条消息 @了我：不再做气泡级高亮，与普通消息视觉一致（@XXX 文本保留蓝色可点击标识） */
 
 .message-text img {
   max-width: 100%;

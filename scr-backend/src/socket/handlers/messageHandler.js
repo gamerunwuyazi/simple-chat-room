@@ -2,6 +2,14 @@ import { SocketEvents } from '../events.js';
 import path from 'path';
 import fs from 'fs';
 import { pool as dbPool, redisClient } from '../../models/database.js';
+import {
+  normalizeClientMsgId,
+  isIdempotencyReady,
+  findExistingGroupMessage,
+  buildReplayGroupMessage,
+  isDuplicateKeyError
+} from '../../utils/messageIdempotency.js';
+import { isFeatureMessageType } from '../../services/groupFeatureService.js';
 
 function checkIfUserMuted(isMutedValue) {
   const result = {
@@ -88,13 +96,38 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
   // 发送消息
   socket.on(SocketEvents.SEND_MESSAGE, async (messageData) => {
     try {
-      const { userId, content, groupId, sessionToken, at_userid } = messageData;
+      const { userId, content, groupId, sessionToken, at_userid, clientMsgId: rawClientMsgId } = messageData;
+
+      // clientMsgId 是重发幂等键：同一用户下唯一，落库时写进 client_msg_id。
+      const clientMsgId = normalizeClientMsgId(rawClientMsgId);
+
+      // 接龙/投票消息壳（type 8/9/10）只能走 REST 专用接口创建（消息与数据源同事务落库），
+      // socket send-message 直接拒绝，防止绕过权限校验/开关校验伪造消息壳。
+      const requestMessageType = messageData.message_type || messageData.messageType || 0;
+      if (isFeatureMessageType(requestMessageType)) {
+        socket.emit(SocketEvents.MESSAGE_SENT, {
+          success: false,
+          clientMsgId: clientMsgId || null,
+          error: {
+            code: 'INVALID_MESSAGE_TYPE',
+            message: '接龙/投票消息请使用专用接口发送'
+          }
+        });
+        return;
+      }
+
+      // 所有 send-message 的回执都原样回带 clientMsgId：
+      // 前端靠它把 ack 与本地「发送中」气泡一一对应（时间戳在连发/乱序时不可靠）。
+      const ack = (payload) => socket.emit(SocketEvents.MESSAGE_SENT, {
+        ...payload,
+        clientMsgId: clientMsgId || null
+      });
   
       // 速率限制检查
       const rateLimitResult = await checkRateLimit(userId);
       if (!rateLimitResult.allowed) {
         // 通过 message-sent 事件返回速率限制错误
-        socket.emit(SocketEvents.MESSAGE_SENT, { 
+        ack({ 
           success: false,
           error: {
             code: 'RATE_LIMIT_EXCEEDED',
@@ -107,7 +140,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
   
       // 验证消息内容...
       if (!validateMessageContent(content)) {
-        socket.emit(SocketEvents.MESSAGE_SENT, {
+        ack({
           success: false,
           error: {
             code: 'INVALID_CONTENT',
@@ -126,7 +159,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
         );
 
         if (groupRows.length === 0) {
-          socket.emit(SocketEvents.MESSAGE_SENT, { 
+          ack({ 
             success: false,
             error: {
               code: 'GROUP_NOT_FOUND',
@@ -140,7 +173,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
 
         // 检查群组是否已被删除
         if (groupInfo.deleted_at !== null) {
-          socket.emit(SocketEvents.MESSAGE_SENT, { 
+          ack({ 
             success: false,
             error: {
               code: 'GROUP_DELETED',
@@ -157,7 +190,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
         );
 
         if (memberRows.length === 0) {
-          socket.emit(SocketEvents.MESSAGE_SENT, { 
+          ack({ 
             success: false,
             error: {
               code: 'NOT_IN_GROUP',
@@ -173,7 +206,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
         if (!isGroupOwner) {
           // 检查全员禁言：如果开启了全员禁言，只有管理员可以发言
           if (groupInfo.is_mute_all === 1 && member.is_admin !== 1) {
-            socket.emit(SocketEvents.MESSAGE_SENT, { 
+            ack({ 
               success: false,
               error: {
                 code: 'GROUP_MUTE_ALL',
@@ -193,7 +226,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
             const remainText = remainMin > 0
               ? `剩余时间${remainMin}分${remainSec}秒`
               : `剩余时间${remainSec}秒`;
-            socket.emit(SocketEvents.MESSAGE_SENT, {
+            ack({
               success: false,
               error: {
                 code: 'USER_MUTED',
@@ -212,7 +245,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
           if (hasAllMemberAt) {
             const isAdmin = isGroupOwner || member.is_admin === 1;
             if (!isAdmin) {
-              socket.emit(SocketEvents.MESSAGE_SENT, { 
+              ack({ 
                 success: false,
                 error: {
                   code: 'NOT_GROUP_ADMIN',
@@ -270,11 +303,52 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
       const messageType = messageData.message_type || messageData.messageType || 0;
       
       const messageContent = cleanContent;
-      
-      const [result] = await pool.execute(
-          'INSERT INTO scr_messages (user_id, content, at_userid, message_type, group_id, timestamp) VALUES (?, ?, ?, ?, ?, NOW())',
-          [userId, messageContent, at_userid ? JSON.stringify(at_userid) : null, messageType, groupId || null]
-      );
+
+      // 幂等：同一 clientMsgId 已经落库（首包成功但回执丢了，前端重发）时，
+      // 直接回首包那条消息，不再插第二条，也不再广播一次。
+      // 存量库未执行 DDL（client_msg_id 列不存在）时自动降级为「不写幂等键」。
+      const idempotencyReady = clientMsgId ? await isIdempotencyReady('scr_messages', pool) : false;
+
+      if (clientMsgId && idempotencyReady) {
+        const existing = await findExistingGroupMessage(pool, userId, clientMsgId);
+        if (existing) {
+          const replayMessage = filterMessageFields(
+            buildReplayGroupMessage(existing, user, groupNickname),
+            groupId ? 'group' : 'public'
+          );
+          replayMessage.clientMsgId = clientMsgId;
+          ack({ success: true, messageId: Number(existing.id), message: replayMessage, duplicate: true });
+          return;
+        }
+      }
+
+      let result;
+      try {
+        // 存量库未执行 DDL 时不写 client_msg_id（否则列不存在会直接报错）
+        const insertSql = idempotencyReady
+          ? 'INSERT INTO scr_messages (user_id, content, at_userid, message_type, group_id, client_msg_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, NOW())'
+          : 'INSERT INTO scr_messages (user_id, content, at_userid, message_type, group_id, timestamp) VALUES (?, ?, ?, ?, ?, NOW())';
+        const insertParams = idempotencyReady
+          ? [userId, messageContent, at_userid ? JSON.stringify(at_userid) : null, messageType, groupId || null, clientMsgId]
+          : [userId, messageContent, at_userid ? JSON.stringify(at_userid) : null, messageType, groupId || null];
+        const [insertResult] = await pool.execute(insertSql, insertParams);
+        result = { insertId: insertResult.insertId };
+      } catch (insertErr) {
+        // 并发重发撞唯一索引：同样按幂等处理，回首包那条
+        if (clientMsgId && idempotencyReady && isDuplicateKeyError(insertErr)) {
+          const existing = await findExistingGroupMessage(pool, userId, clientMsgId);
+          if (existing) {
+            const replayMessage = filterMessageFields(
+              buildReplayGroupMessage(existing, user, groupNickname),
+              groupId ? 'group' : 'public'
+            );
+            replayMessage.clientMsgId = clientMsgId;
+            ack({ success: true, messageId: Number(existing.id), message: replayMessage, duplicate: true });
+            return;
+          }
+        }
+        throw insertErr;
+      }
 
       // 同步"范围内最新消息ID"缓存，供 clear-group/global-unread 使用（消除每包 MAX(id) DB 查询）
       // fire-and-forget，失败不影响消息发送
@@ -318,13 +392,19 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
       // 根据消息类型过滤字段
       const messageTypeStr = groupId ? 'group' : 'public';
       const newMessage = filterMessageFields(rawMessage, messageTypeStr);
+
+      // 回带 clientMsgId，让发送者可以用一次 id 匹配同时收敛本地气泡并去重。
+      // 长度截断防止客户端塞入超长字符串。
+      if (clientMsgId) {
+        newMessage.clientMsgId = String(clientMsgId).slice(0, 64);
+      }
       
       if (groupId) {
         // 确保groupId是字符串类型，避免Map键类型不一致
         const groupIdStr = String(groupId);
         
         // 先让发送者立即收到发送结果（大群广播异步化后，发送者无需等待广播完成）
-        socket.emit(SocketEvents.MESSAGE_SENT, { messageId: result.insertId, message: newMessage });
+        ack({ success: true, messageId: result.insertId, message: newMessage, duplicate: false });
         
         // 群组消息：入队广播任务，由消费者异步扇出给群里其他成员（避开发送者）
         try {
@@ -335,7 +415,7 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
         
       } else {
         // 先让发送者立即收到发送结果
-        socket.emit(SocketEvents.MESSAGE_SENT, { messageId: result.insertId, message: newMessage });
+        ack({ success: true, messageId: result.insertId, message: newMessage, duplicate: false });
         
         // 全局消息：入队广播任务（避开发送者）
         try {
@@ -571,11 +651,13 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
           [numericFriendId, numericUserId]
         );
         
-        // 发送已读事件给对方
-        io.to(`user_${numericFriendId}`).emit(SocketEvents.PRIVATE_MESSAGE_READ, {
-          fromUserId: numericUserId,
-          friendId: numericFriendId
-        });
+        // 发送已读事件给对方（Redis Streams 分片扇出，不直接 io.to）
+        if (broadcastProducer) {
+          await broadcastProducer.enqueue(`user_${numericFriendId}`, SocketEvents.PRIVATE_MESSAGE_READ, {
+            fromUserId: numericUserId,
+            friendId: numericFriendId
+          });
+        }
         
         // 检查对方是否在线
         const allOnlineUsers = await getAllOnlineUsers();
@@ -634,7 +716,9 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
           // 过滤私信消息字段
           const type103Message = filterMessageFields(rawType103Message, 'private');
           
-          io.to(`user_${numericFriendId}`).emit(SocketEvents.PRIVATE_MESSAGE_RECEIVED, type103Message);
+          if (broadcastProducer) {
+            await broadcastProducer.enqueue(`user_${numericFriendId}`, SocketEvents.PRIVATE_MESSAGE_RECEIVED, type103Message);
+          }
         }
         
       } else if (type === 'group') {
@@ -793,6 +877,8 @@ export function registerMessageHandlers(socket, io, { pool, checkRateLimit, vali
             avatarUrl: msg.avatarUrl,
             content: msg.content,
             at_userid: atUserIds,
+            // 与实时推送同口径用驼峰，历史消息才带得上 @ 名单
+            atUserid: atUserIds,
             messageType: msg.messageType,
             isRead: msg.isRead || 0,
             timestamp: new Date(msg.timestamp).getTime(),

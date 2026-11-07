@@ -123,4 +123,10 @@ watch(
 .fetching-message-box i {
   color: #4a90e2;
 }
+
+body.dark-mode .fetching-message-box {
+  background-color: #161b22;
+  color: #c9d1d9;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
 </style>

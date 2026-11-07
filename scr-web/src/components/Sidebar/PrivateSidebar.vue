@@ -199,6 +199,7 @@ function handleNewFriendsClick() {
     setActiveChat('private', null, false);
   }
   sessionStore.setCurrentPrivateChatUserId(null);
+  sessionStore.showBlackList = false;
   sessionStore.showFriendRequests = true;
 }
 
@@ -335,9 +336,9 @@ function handleSearchUserClick() {
                         <span v-if="isUserOnline(friend.id) && !friend.deleted_at" class="online-indicator"></span>
                     </span>
                     <div class="friend-info">
-                        <span class="friend-name" :style="friend.deleted_at ? { color: '#000' } : {}">{{ getFriendDisplayName(friend) }} <span v-if="friend.deleted_at" style="font-size: 12px;">(已删除)</span></span>
+                        <span class="friend-name deleted-name">{{ getFriendDisplayName(friend) }} <span v-if="friend.deleted_at" style="font-size: 12px;">(已删除)</span></span>
                         <span v-if="hasDraft(friend) && !friend.deleted_at" class="friend-last-message draft-text">{{ getPrivateLastMessage(friend) }}</span>
-                        <span v-else-if="friend.deleted_at" class="friend-last-message" style="color: #000;">该会话已被删除</span>
+                        <span v-else-if="friend.deleted_at" class="friend-last-message deleted-text">该会话已被删除</span>
                         <span v-else class="friend-last-message">{{ getPrivateLastMessage(friend) }}</span>
                     </div>
                     <span v-if="isPrivateMuted(friend.id) && !friend.deleted_at" class="mute-icon" style="margin-left: 5px; font-size: 12px;" title="已免打扰"><i class="fas fa-bell-slash"></i></span>
@@ -413,6 +414,28 @@ function handleSearchUserClick() {
 
 .deleted-item:hover {
   background-color: #fee2e2 !important;
+}
+
+/* 已删除会话：名称/副文案固定深色（浅色模式），深色模式单独提亮 */
+.deleted-item .friend-name,
+.deleted-item .friend-last-message {
+  color: #000;
+}
+
+body.dark-mode .deleted-item {
+  background-color: rgba(239, 68, 68, 0.15) !important;
+}
+
+body.dark-mode .deleted-item:hover {
+  background-color: rgba(239, 68, 68, 0.25) !important;
+}
+
+body.dark-mode .deleted-item .friend-name {
+  color: #fca5a5;
+}
+
+body.dark-mode .deleted-item .friend-last-message {
+  color: #f87171;
 }
 
 .deleted-item .user-avatar {

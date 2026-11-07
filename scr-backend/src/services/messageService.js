@@ -108,6 +108,9 @@ export async function getGlobalMessages(limit = 50, olderThan = null, userId = n
         avatarUrl: msg.avatarUrl,
         content: msg.content,
         at_userid: atUserIds,
+        // 实时推送用的是驼峰 atUserid，历史接口两种键都返回，
+        // 否则前端刷新后拿到的历史消息没有 @ 名单（@我 气泡标识会消失）
+        atUserid: atUserIds,
         messageType: msg.messageType,
         groupId: msg.groupId !== null && msg.groupId !== undefined ? parseInt(msg.groupId) : null,
         timestamp: msg.timestamp,
@@ -244,6 +247,9 @@ export async function getGroupMessages(groupId, limit = 50, olderThan = null, us
         avatarUrl: msg.avatarUrl,
         content: msg.content,
         at_userid: atUserIds,
+        // 实时推送用的是驼峰 atUserid，历史接口两种键都返回，
+        // 否则前端刷新后拿到的历史消息没有 @ 名单（@我 气泡标识会消失）
+        atUserid: atUserIds,
         messageType: msg.messageType,
         groupId: msg.groupId !== null && msg.groupId !== undefined ? parseInt(msg.groupId) : null,
         timestamp: msg.timestamp,
@@ -592,6 +598,266 @@ export async function getOfflineMessages(req, res) {
   } catch (err) {
     console.error('❌ 获取离线消息失败:', err.message);
     res.status(500).json({ status: 'error', message: '获取离线消息失败' });
+  }
+}
+
+// ---------------------------------------------------------------- 消息浏览/查找（查找消息弹窗）
+
+// 与 groupFeatureService.SEARCH_TYPES 的 key/message_type 保持一致
+const BROWSE_TYPES = {
+  text: [0, 4, 5],
+  image: [1],
+  file: [2],
+  card: [3],
+  video: [6],
+  audio: [7]
+};
+
+// 每页上限 20（需求硬约束）
+const BROWSE_PAGE_SIZE_MAX = 20;
+
+function escapeLike(value) {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+// 从消息内容里提取「用户能看到的文本」，用于关键词模式的安全网精筛：
+// 任何未识别/JSON 原文一律返回空串，保证关键词绝不命中 payload JSON。
+function extractBrowseSearchText(row) {
+  const raw = row.content;
+  switch (row.message_type) {
+    case 0:
+    case 5: {
+      if (typeof raw !== 'string') return '';
+      const trimmed = raw.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) return '';
+      return raw;
+    }
+    case 2: {
+      const parsed = safeBrowseJsonParse(raw);
+      return parsed ? String(parsed.filename || parsed.name || '') : '';
+    }
+    case 3: {
+      const parsed = safeBrowseJsonParse(raw);
+      return parsed ? String(parsed.group_name || parsed.groupName || '') : '';
+    }
+    case 6:
+    case 7: {
+      const parsed = safeBrowseJsonParse(raw);
+      return parsed ? String(parsed.filename || parsed.name || '') : '';
+    }
+    case 4: {
+      const parsed = safeBrowseJsonParse(raw);
+      if (!parsed) return '';
+      const own = typeof parsed.text === 'string' ? parsed.text : '';
+      return own;
+    }
+    default:
+      return '';
+  }
+}
+
+function safeBrowseJsonParse(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function isGroupMemberForBrowse(groupId, userId) {
+  const [rows] = await pool.execute(
+    'SELECT id FROM scr_group_members WHERE group_id = ? AND user_id = ? AND deleted_at IS NULL',
+    [groupId, userId]
+  );
+  return rows.length > 0;
+}
+
+export async function browseMessages(req, res) {
+  try {
+    const userId = parseInt(req.userId, 10);
+    if (isNaN(userId)) {
+      return res.status(401).json({ status: 'error', message: '未授权' });
+    }
+
+    const scope = String(req.query.scope || '').trim();
+    if (!['public', 'group', 'private'].includes(scope)) {
+      return res.status(400).json({ status: 'error', message: 'scope 必须是 public/group/private' });
+    }
+
+    let groupId = null;
+    let peerId = null;
+    if (scope === 'group') {
+      groupId = parseInt(req.query.groupId, 10);
+      if (isNaN(groupId) || groupId <= 0) {
+        return res.status(400).json({ status: 'error', message: '参数错误：缺少 groupId' });
+      }
+      if (!(await isGroupMemberForBrowse(groupId, userId))) {
+        return res.status(403).json({ status: 'error', message: '你不是该群成员' });
+      }
+    } else if (scope === 'private') {
+      peerId = parseInt(req.query.peerId, 10);
+      if (isNaN(peerId) || peerId <= 0) {
+        return res.status(400).json({ status: 'error', message: '参数错误：缺少 peerId' });
+      }
+      // 只能浏览自己与该好友（好友关系 status=1）之间的私信，沿用离线消息的权限口径
+      const [friendRows] = await pool.execute(
+        'SELECT id FROM scr_friends WHERE user_id = ? AND friend_id = ? AND status = 1',
+        [userId, peerId]
+      );
+      if (friendRows.length === 0) {
+        return res.status(403).json({ status: 'error', message: '只能查看自己与好友的私信' });
+      }
+    }
+
+    // 类型筛选：逗号分隔的 BROWSE_TYPES key，非法 key 直接忽略
+    const requested = String(req.query.types || '')
+      .split(',')
+      .map((t) => t.trim())
+      .filter((t) => Object.prototype.hasOwnProperty.call(BROWSE_TYPES, t));
+    const typeList = requested.length > 0 ? requested : Object.keys(BROWSE_TYPES);
+    const messageTypes = Array.from(new Set(typeList.flatMap((t) => BROWSE_TYPES[t])));
+
+    const keyword = String(req.query.keyword || '').trim();
+    if (keyword.length > 100) {
+      return res.status(400).json({ status: 'error', message: '搜索关键词过长' });
+    }
+    // 浏览模式（无关键词）必须先选类型；关键词模式类型可选
+    if (keyword.length === 0 && requested.length === 0) {
+      return res.status(400).json({ status: 'error', message: '请选择消息类型或输入搜索关键词' });
+    }
+
+    let page = parseInt(req.query.page, 10);
+    if (isNaN(page) || page < 1) page = 1;
+    let pageSize = parseInt(req.query.pageSize, 10);
+    if (isNaN(pageSize) || pageSize < 1) pageSize = BROWSE_PAGE_SIZE_MAX;
+    pageSize = Math.min(pageSize, BROWSE_PAGE_SIZE_MAX);
+    const offset = (page - 1) * pageSize;
+
+    // 基础条件：会话范围（权限边界）+ 类型范围
+    const whereConds = [];
+    const params = [];
+    if (scope === 'public') {
+      whereConds.push('m.group_id IS NULL');
+    } else if (scope === 'group') {
+      whereConds.push('m.group_id = ?');
+      params.push(groupId);
+    } else {
+      whereConds.push('((m.sender_id = ? AND m.receiver_id = ?) OR (m.receiver_id = ? AND m.sender_id = ?))');
+      params.push(userId, peerId, userId, peerId);
+    }
+    whereConds.push(`m.message_type IN (${messageTypes.map(() => '?').join(',')})`);
+    params.push(...messageTypes);
+
+    // 关键词模式：SQL 层按「可渲染字段」限定匹配，绝不 LIKE content 原文里的 payload JSON。
+    // 图片（1）没有可搜索文本，不参与关键词匹配；群名片（3）/文件名（2,6,7）/引用（4）
+    // 通过 JSON_EXTRACT 只取对应字段；纯文本（0,5）要求 content 不是 JSON 开头。
+    if (keyword.length > 0) {
+      const like = `%${escapeLike(keyword)}%`;
+      const keywordConds = [];
+      const keywordParams = [];
+      const categories = new Set(
+        typeList.filter((t) => t !== 'image')
+      );
+      if (categories.has('text')) {
+        keywordConds.push(
+          `(m.message_type IN (0,5) AND m.content NOT LIKE '{%' AND m.content NOT LIKE '[%' AND m.content LIKE ?)`
+        );
+        keywordParams.push(like);
+        keywordConds.push(
+          `(m.message_type = 4 AND JSON_VALID(m.content) AND JSON_UNQUOTE(JSON_EXTRACT(m.content, '$.text')) LIKE ?)`
+        );
+        keywordParams.push(like);
+      }
+      if (categories.has('file') || categories.has('video') || categories.has('audio')) {
+        keywordConds.push(
+          `(m.message_type IN (2,6,7) AND JSON_VALID(m.content) AND (JSON_UNQUOTE(JSON_EXTRACT(m.content, '$.filename')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(m.content, '$.name')) LIKE ?))`
+        );
+        keywordParams.push(like, like);
+      }
+      if (categories.has('card')) {
+        keywordConds.push(
+          `(m.message_type = 3 AND JSON_VALID(m.content) AND (JSON_UNQUOTE(JSON_EXTRACT(m.content, '$.group_name')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(m.content, '$.groupName')) LIKE ?))`
+        );
+        keywordParams.push(like, like);
+      }
+      if (keywordConds.length > 0) {
+        whereConds.push(`(${keywordConds.join(' OR ')})`);
+        params.push(...keywordParams);
+      } else {
+        // 只选了图片类型却带关键词：无可匹配字段，直接空结果
+        whereConds.push('1 = 0');
+      }
+    }
+
+    const isPrivate = scope === 'private';
+    const selectFields = isPrivate
+      ? `SELECT m.id, m.sender_id, m.receiver_id, m.content, m.message_type, m.timestamp,
+                m.sender_id AS user_id, u.nickname, u.avatar_url`
+      : scope === 'group'
+        ? `SELECT m.id, m.user_id, m.content, m.message_type, m.timestamp, m.group_id,
+                  u.nickname, u.avatar_url, gm.group_nickname`
+        : `SELECT m.id, m.user_id, m.content, m.message_type, m.timestamp, m.group_id,
+                  u.nickname, u.avatar_url`;
+    const table = isPrivate ? 'scr_private_messages' : 'scr_messages';
+    const joinClause = scope === 'group'
+      ? `LEFT JOIN scr_users u ON u.id = m.user_id
+         LEFT JOIN scr_group_members gm ON m.user_id = gm.user_id AND m.group_id = gm.group_id AND gm.deleted_at IS NULL`
+      : isPrivate
+        ? 'LEFT JOIN scr_users u ON u.id = m.sender_id'
+        : 'LEFT JOIN scr_users u ON u.id = m.user_id';
+
+    const sql = `${selectFields} FROM ${table} m ${joinClause} WHERE ${whereConds.join(' AND ')}
+      ORDER BY m.timestamp DESC, m.id DESC LIMIT ? OFFSET ?`;
+    params.push(pageSize, offset);
+
+    const [rows] = await pool.query(sql, params);
+
+    // 关键词模式的安全网精筛：只保留「可渲染文本」命中关键词的行，杜绝 JSON 键名等脏命中
+    let messages = rows;
+    if (keyword.length > 0) {
+      const needle = keyword.toLowerCase();
+      messages = rows.filter((row) => {
+        const text = extractBrowseSearchText(row);
+        return text && text.toLowerCase().includes(needle);
+      });
+    }
+
+    const resultMessages = messages.map((row) => {
+      const base = {
+        id: row.id,
+        userId: row.user_id,
+        nickname: row.nickname || '',
+        avatarUrl: row.avatar_url || null,
+        content: row.content,
+        messageType: row.message_type,
+        timestamp: row.timestamp
+      };
+      if (isPrivate) {
+        base.senderId = row.sender_id;
+        base.receiverId = row.receiver_id;
+      } else {
+        base.groupId = row.group_id !== null && row.group_id !== undefined ? parseInt(row.group_id) : null;
+      }
+      if (row.group_nickname) base.groupNickname = row.group_nickname;
+      return base;
+    });
+
+    res.json({
+      status: 'success',
+      scope,
+      types: typeList,
+      keyword,
+      page,
+      pageSize,
+      hasMore: rows.length === pageSize,
+      messages: resultMessages
+    });
+  } catch (err) {
+    console.error('❌ 消息浏览/查找失败:', err.message);
+    res.status(500).json({ status: 'error', message: '消息浏览/查找失败' });
   }
 }
 

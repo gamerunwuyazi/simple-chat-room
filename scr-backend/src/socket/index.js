@@ -4,9 +4,11 @@ import { createClient } from 'redis';
 import { registerUserHandlers } from './handlers/userHandler.js';
 import { registerMessageHandlers } from './handlers/messageHandler.js';
 import { registerPrivateHandlers } from './handlers/privateHandler.js';
+import { registerTypingHandlers } from './handlers/typingHandler.js';
 import { socketConfig, getRedisUrl } from '../config/index.js';
 import { createBroadcastProducer } from '../utils/broadcast/producer.js';
 import { createBroadcastConsumer } from '../utils/broadcast/consumer.js';
+import { createTypingHub } from '../utils/typing/typingHub.js';
 
 // 在线用户管理（使用 Redis）
 // 存储在 Redis key: scr:online_users (Hash: socketId -> userData)
@@ -190,6 +192,11 @@ export function setupSocketIO(server, { pool, redisClient, isIPBanned, getUserSe
   const broadcastConsumer = createBroadcastConsumer({ io });
   broadcastConsumer.start().catch((err) => console.error('启动广播消费者失败:', err.message));
 
+  // typing 独立通道：高频可丢，走 Redis pub/sub 分片（group/user）+ 同房间 2s 合并，
+  // 不复用聊天消息的 Stream 扇出（消息必须零丢失，typing 只需要最终状态）
+  const typingHub = createTypingHub({ io, redisClient });
+  typingHub.start().catch((err) => console.error('启动 typing 分片订阅失败:', err.message));
+
   // 优雅关闭：立即停止监听以释放端口，再停止广播消费者（持久化 lastId），随后退出进程。
   // 关键：
   //   1. 不能等待所有 socket 连接关闭——WebSocket/HTTP keep-alive 永不自发结束，等它们会卡死。
@@ -211,6 +218,11 @@ export function setupSocketIO(server, { pool, redisClient, isIPBanned, getUserSe
       await broadcastConsumer.stop();
     } catch (err) {
       console.error('停止广播消费者失败:', err.message);
+    }
+    try {
+      await typingHub.stop();
+    } catch (err) {
+      console.error('停止 typing 订阅失败:', err.message);
     }
     process.exit(0);
   }
@@ -365,7 +377,7 @@ export function setupSocketIO(server, { pool, redisClient, isIPBanned, getUserSe
       } catch (err) {
         console.error('❌ 中间件 Redis pipeline 失败:', err.message);
         await forceDisconnectUser(socket, 'session-expired', eventName, data);
-        throw new Error('会话校验失败');
+        throw new Error('会话校验失败', { cause: err });
       }
       const isAuth = replies?.[0];
       const token = replies?.[1] ?? null;
@@ -463,12 +475,14 @@ export function setupSocketIO(server, { pool, redisClient, isIPBanned, getUserSe
       filterMessageFields,
       isGroupAdmin,
       getGlobalMessages,
-      getGroupMessages
+      getGroupMessages,
+      typingHub
     };
 
     registerUserHandlers(socket, io, context);
     registerMessageHandlers(socket, io, context);
     registerPrivateHandlers(socket, io, context);
+    registerTypingHandlers(socket, io, context);
   });
 
   return { io, broadcastProducer, broadcastConsumer };

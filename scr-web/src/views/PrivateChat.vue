@@ -43,12 +43,21 @@
       </div>
 
       <div id="privateMessageContainer" ref="privateMessageContainerRef">
-        <template v-if="privateMessages.length !== 0">
+        <template v-if="privateMessages.length !== 0 || pendingMessages.length !== 0">
           <PrivateMessageItem
             v-for="message in privateMessages"
             :key="message.id"
             :message="message"
             :is-own="isOwnMessage(message)"
+          />
+          <PendingBubble
+            v-for="item in pendingMessages"
+            :key="item.clientMsgId"
+            :content="item.content"
+            :message-type="item.messageType"
+            :status="item.status"
+            :error="item.error"
+            @retry="handlePendingRetry(item.clientMsgId)"
           />
         </template>
         <div v-else class="empty-state">
@@ -57,6 +66,7 @@
         </div>
       </div>
 
+      <TypingIndicator :names="typingNames" peer />
       <div class="input-area">
         <QuotedMessagePreview v-if="inputStore.quotedMessage" :quoted-message="inputStore.quotedMessage" @close="inputStore.clearQuotedMessage()" />
         <div class="input-container" id="privateInputContainer"
@@ -84,7 +94,10 @@
         <div class="input-buttons" id="privateInputButtons">
           <button id="sendPrivateMessage" @click="handleSendPrivateMessage">发送</button>
           <button id="privateMoreButton" class="more-button" title="更多功能" @click="toggleMoreFunctions">
-            ⋯ <span class="button-text">更多</span>
+            <i class="fas fa-ellipsis" aria-hidden="true"></i> <span class="button-text">更多</span>
+          </button>
+          <button class="emoji-button" title="表情" @click.stop="showEmoji = !showEmoji">
+            <i class="far fa-smile" aria-hidden="true"></i>
           </button>
           <button class="toggle-btn" 
             @click="toggleMarkdownToolbar">
@@ -119,15 +132,20 @@
         <div class="upload-progress-bar" id="privateUploadProgressBar" :style="{ width: inputStore.uploadProgress + '%' }"></div>
       </div>
 
+      <EmojiPanel v-model:visible="showEmoji" @select="insertPrivateEmoji" />
+
       <SearchMessageModal
         v-model="showSearchModal"
         :search-results="searchResults"
         :is-searching="isSearching"
         :has-searched="hasSearched"
+        :is-loading-more="isLoadingMore"
+        :has-more="hasMore"
         @search="executeSearch"
         @navigate-prev="navigateToPrevSearchResult"
         @navigate-next="navigateToNextSearchResult"
         @scroll-to-message="scrollToMessage"
+        @load-more="loadMore"
       >
         <template #results="{ results, onClick }">
           <PrivateMessageItem
@@ -181,6 +199,12 @@ import { ref, onMounted, onUnmounted, computed, watch, nextTick } from "vue";
 import { useRoute } from "vue-router";
 
 import PrivateMessageItem from "@/components/MessageItem/PrivateMessageItem.vue";
+import PendingBubble from "@/components/MessageStatus/PendingBubble.vue";
+import TypingIndicator from "@/components/MessageStatus/TypingIndicator.vue";
+import { useMessageStatusStore } from "@/stores/messageStatusStore";
+import { useTypingStore } from "@/stores/typingStore";
+import { notifyTyping, stopTyping, typingSetting } from "@/utils/chat/typing.js";
+import { resend as resendMessage } from "@/utils/chat/messageStatus.js";
 import QuotedMessagePreview from "@/components/MessageItem/QuotedMessagePreview.vue";
 import FriendRequestsPanel from "@/components/FriendRequestsPanel.vue";
 import BlackListPanel from "@/components/BlackListPanel.vue";
@@ -208,13 +232,29 @@ import {
 } from "@/utils/chat";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
+import { useMessageBrowse } from "@/composables/useMessageBrowse";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
+import EmojiPanel from "@/components/EmojiPanel.vue";
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
 const friendStore = useFriendStore();
 const sessionStore = useSessionStore();
 const inputStore = useInputStore();
+const messageStatusStore = useMessageStatusStore();
+const typingStore = useTypingStore();
+
+const typingNames = computed(() => {
+  // 设置页关掉「显示自己正在输入」后，也不再显示别人的输入提示
+  if (!typingSetting.value) return [];
+  return sessionStore.currentPrivateChatUserId
+    ? typingStore.list('private', sessionStore.currentPrivateChatUserId, baseStore.currentUser?.id)
+    : [];
+});
+
+function handlePendingRetry(clientMsgId) {
+  resendMessage(clientMsgId);
+}
 const draftStore = useDraftStore();
 const { scrollAndHighlight } = useMessageHighlight();
 const { currentSearchIndex, navigateToNextSearchResult: navNext, navigateToPrevSearchResult: navPrev } = useSearchNavigation();
@@ -253,6 +293,17 @@ const privateMessages = computed(() => {
   return friendStore.privateMessages[sessionStore.currentPrivateChatUserId] || [];
 });
 
+// 发送状态按 messageId 交接：真实消息渲染出来之前，气泡不撤（列表刷新也不重置动画）
+const privateMessageIds = computed(() => privateMessages.value.map((message) => message.id));
+const pendingMessages = computed(() => (
+  sessionStore.currentPrivateChatUserId
+    ? messageStatusStore.listVisible('private', sessionStore.currentPrivateChatUserId, privateMessageIds.value)
+    : []
+));
+watch(privateMessageIds, (ids) => {
+  messageStatusStore.pruneRendered('private', sessionStore.currentPrivateChatUserId, ids);
+});
+
 function isOwnMessage(message) {
   if (!currentUserId.value) return false;
   return String(message.userId) === String(currentUserId.value) || 
@@ -280,6 +331,15 @@ const currentUserName = ref('好友昵称');
 const currentUserAvatarUrl = ref('');
 const currentUserInitials = ref('U');
 const showMarkdownToolbar = ref(false);
+const showEmoji = ref(false);
+
+function insertPrivateEmoji(emoji) {
+  const input = privateMessageInputRef.value;
+  if (!input) return;
+  input.focus();
+  document.execCommand('insertText', false, emoji);
+  handlePrivateMessageInput();
+}
 const showMoreFunctions = ref(false);
 
 const displayCurrentUserName = computed(() => {
@@ -350,8 +410,11 @@ function handlePrivateMessageInput() {
     if (textContent === '' && (!htmlContent || htmlContent === '<br>' || htmlContent === '<br/>' || htmlContent === '<br />')) {
       input.innerHTML = '';
       inputStore.privateMessageInput = '';
+      stopTyping('private', sessionStore.currentPrivateChatUserId);
       return;
     }
+
+    notifyTyping('private', sessionStore.currentPrivateChatUserId);
     
     if (restoringPrivateDraft) {
       return;
@@ -394,6 +457,7 @@ function handlePrivateMessageInputKeydown(e) {
 
 function handleSendPrivateMessage() {
   sendPrivateMessage();
+  stopTyping('private', sessionStore.currentPrivateChatUserId);
   scrollToBottom();
 }
 
@@ -616,9 +680,21 @@ function handlePrivateVideoCancel() {
 
 const showSearchModal = ref(false);
 const searchKeyword = ref('');
-const searchResults = ref([]);
-const isSearching = ref(false);
-const hasSearched = ref(false);
+
+// 查找消息：浏览（无关键词按类型）+ 关键词查找都走后端 /api/messages/browse，
+// scope=private 且只能查自己与当前好友的私信，权限边界由后端校验
+const {
+  searchResults,
+  isSearching,
+  hasSearched,
+  isLoadingMore,
+  hasMore,
+  executeSearch: runMessageBrowse,
+  loadMore
+} = useMessageBrowse(() => ({
+  scope: 'private',
+  peerId: sessionStore.currentPrivateChatUserId
+}));
 
 function openSearchModal() {
   showSearchModal.value = true;
@@ -629,76 +705,46 @@ function closeSearchModal() {
   showSearchModal.value = false;
   searchKeyword.value = '';
   searchResults.value = [];
-  hasSearched.value = false;
 }
 
-async function executeSearch(keyword) {
-  if (!keyword || !keyword.trim()) return;
-  searchKeyword.value = keyword;
-  
-  isSearching.value = true;
-  hasSearched.value = false;
-  searchResults.value = [];
-  
+async function executeSearch(keyword, types = []) {
+  searchKeyword.value = String(keyword || '').trim();
+  await runMessageBrowse(keyword, types);
+  if (!searchKeyword.value) return;
+
+  // 关键词模式：为命中的旧消息补充上下文到主列表，保证点击结果可以跳转定位
   try {
     const friendId = sessionStore.currentPrivateChatUserId;
     const prefix = `chats-${baseStore.currentUser?.id || 'guest'}`;
     const storageKey = `${prefix}-private-${friendId}`;
-    
+
     const storageData = await localForage.getItem(storageKey);
     const allMessages = storageData?.messages || [];
-    const keyword = searchKeyword.value.trim().toLowerCase();
-    
-    const matchedMessages = allMessages
-      .filter(msg => {
-        if (msg.messageType === 101 || msg.messageType === 102 || msg.messageType === 103) return false;
-        const content = msg.content?.toLowerCase() || '';
-        return content.includes(keyword);
-      });
-    
-    if (matchedMessages.length > 0) {
-      searchResults.value = [...matchedMessages].reverse();
+    if (allMessages.length === 0 || searchResults.value.length === 0) return;
 
-      // 为搜索结果补充头像信息（同时设置 avatarUrl 和 avatar_url）
-      const currentUserId_ = baseStore.currentUser?.id;
-      const friendId_ = sessionStore.currentPrivateChatUserId;
-      const myAvatar = baseStore.currentUser?.avatarUrl || baseStore.currentUser?.avatar_url || '';
-      let friendAvatar = sessionStore.currentPrivateChatAvatarUrl || '';
-      searchResults.value.forEach(msg => {
-        const msgUserId = String(msg.userId || msg.senderId || '');
-        if (msgUserId === String(currentUserId_)) {
-          msg.avatarUrl = myAvatar;
-          msg.avatar_url = myAvatar;
-        } else {
-          msg.avatarUrl = friendAvatar;
-          msg.avatar_url = friendAvatar;
-        }
-      });
-      
-      const minMatchedId = Math.min(...matchedMessages.map(m => m.id));
-      
-      const storeMessages = friendStore.privateMessages[friendId] || [];
-      if (storeMessages.length > 0) {
-        const storeMinId = Math.min(...storeMessages.map(m => m.id));
-        
-        const startId = Math.max(1, minMatchedId - 20);
-        const endId = storeMinId - 1;
-        
-        if (startId <= endId) {
-          const messagesToAdd = allMessages
-            .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
-            .sort((a, b) => a.id - b.id);
-          
-          friendStore.prependPrivateMessages(friendId, messagesToAdd);
-        }
-      }
+    const localMatched = searchResults.value.filter(
+      (r) => allMessages.some((m) => m.id === r.id) && r.messageType !== 101 && r.messageType !== 102 && r.messageType !== 103
+    );
+    if (localMatched.length === 0) return;
+
+    const minMatchedId = Math.min(...localMatched.map(m => m.id));
+
+    const storeMessages = friendStore.privateMessages[friendId] || [];
+    if (storeMessages.length === 0) return;
+    const storeMinId = Math.min(...storeMessages.map(m => m.id));
+
+    const startId = Math.max(1, minMatchedId - 20);
+    const endId = storeMinId - 1;
+
+    if (startId <= endId) {
+      const messagesToAdd = allMessages
+        .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
+        .sort((a, b) => a.id - b.id);
+
+      friendStore.prependPrivateMessages(friendId, messagesToAdd);
     }
-    
-    hasSearched.value = true;
   } catch (err) {
-    console.error('搜索失败:', err);
-  } finally {
-    isSearching.value = false;
+    console.error('补充搜索结果上下文失败:', err);
   }
 }
 

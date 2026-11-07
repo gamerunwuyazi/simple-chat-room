@@ -12,6 +12,7 @@ import { Worker } from 'worker_threads';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { dbConfig, getRedisUrl, messageConfig } from '../config/index.js';
+import { resolveDbLimits } from '../config/poolBudget.js';
 import bundledWorkerSource from './workerSource.js';
 
 // eval worker 内的 require('mysql2'/'redis') 依赖 filename 来定位 node_modules，
@@ -33,8 +34,16 @@ const POOL_SIZE = Math.max(1, parseInt(process.env.MESSAGE_WORKER_POOL_SIZE || '
 //   池空时新建连接（connectTimeout 3s）+ 建连排队等待。
 // 5s 足够，且绝不用于 terminate worker（终止只保留给真正的崩溃/退出）。
 const CONNECTION_PROBE_TIMEOUT_MS = 5000;
+// 就绪超时的最大尝试次数：第 1 次超时不立刻回退主线程，而是通知 worker
+// 重建（可能假死的）连接池后再试一次；仍超时才回退——空闲连接被 MySQL/
+// 网络设备单方面掐断的场景由这一次重建+重试自愈，回退只作最终兜底。
+const MAX_PROBE_ATTEMPTS = 2;
 // 业务查询的总超时（与就绪超时相互独立）。
 const TASK_TIMEOUT_MS = 30000;
+
+// worker 池限额：多实例部署时按连接预算自适应收紧（与主池共用一次探测决策，
+// resolveDbLimits 有 memoization）。单实例时为默认值/用户配置值，不加限制。
+const { workerPoolLimit } = await resolveDbLimits();
 
 const workerData = {
   dbConfig: {
@@ -44,7 +53,8 @@ const workerData = {
     database: dbConfig.database
   },
   redisUrl: getRedisUrl(),
-  offlineLimits: messageConfig.offlineLimits
+  offlineLimits: messageConfig.offlineLimits,
+  workerConnectionLimit: workerPoolLimit
 };
 
 let nextId = 1;
@@ -138,6 +148,10 @@ function getAvailableWorker() {
 }
 
 export function runMessageTask(type, params) {
+  return runMessageTaskAttempt(type, params, 0);
+}
+
+function runMessageTaskAttempt(type, params, attempt) {
   return new Promise((resolve, reject) => {
     const id = nextId++;
     const target = getAvailableWorker();
@@ -151,10 +165,21 @@ export function runMessageTask(type, params) {
     pendingTask.probeTimer = setTimeout(() => {
       if (!pending.has(id) || pendingTask.ready) return;
       // 只是「还没拿到连接」，不能据此判定 worker 不可信：
-      // 拒绝本次任务让调用方回退主线程即可，但保留 worker 存活，
-      // 避免 terminate/重建 isolate 造成的原生内存 churn。
+      // 先怀疑是池内连接假死——通知 worker 丢弃旧池并重建，再试一次；
+      // 仍超时才拒绝本次任务让调用方回退主线程（最终兜底）。
+      // 保留 worker 存活，避免 terminate/重建 isolate 造成的原生内存 churn。
       pending.delete(id);
       clearTimeout(pendingTask.taskTimer);
+      if (attempt + 1 < MAX_PROBE_ATTEMPTS) {
+        console.warn(`⚠️ 消息 Worker 就绪超时（第 ${attempt + 1} 次），通知重建连接池后重试`);
+        try {
+          worker.postMessage({ type: '__resetDb' });
+          resolve(runMessageTaskAttempt(type, params, attempt + 1));
+        } catch (err) {
+          reject(new Error(`消息 Worker 重建重试失败: ${err.message}`));
+        }
+        return;
+      }
       reject(new Error('消息 Worker 就绪超时'));
     }, CONNECTION_PROBE_TIMEOUT_MS);
     pendingTask.taskTimer = setTimeout(() => {

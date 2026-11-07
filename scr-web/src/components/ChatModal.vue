@@ -25,7 +25,7 @@
                 <div class="member-header">
                   <div class="member-title">群成员</div>
                   <div style="display: flex; align-items: center; gap: 8px;">
-                    <i v-if="isCurrentUserGroupOwner || isCurrentUserGroupAdmin" class="fas fa-rotate-right refresh-btn" title="刷新成员列表" @click="loadGroupMembers(modalStore.modalData.groupInfo.id); loadGroupMuteStatus(modalStore.modalData.groupInfo.id)"></i>
+                    <i v-if="isCurrentUserGroupOwner || isCurrentUserGroupAdmin" class="fas fa-rotate-right refresh-btn" title="刷新成员列表" @click="loadGroupMembers(modalStore.modalData.groupInfo.id); loadGroupMuteStatus(modalStore.modalData.groupInfo.id); loadGroupFeatureSettings(modalStore.modalData.groupInfo.id)"></i>
                     <div class="more-member-btn" @click="openGroupMembersModal"><span>查看全部 {{ groupMembers.length }}名成员</span><i class="fas fa-chevron-right"></i></div>
                   </div>
                 </div>
@@ -135,6 +135,27 @@
                   <div class="label"><span>全员禁言</span></div>
                   <label class="switch">
                     <input type="checkbox" :checked="isMuteAllEnabled" @change="handleToggleMuteAll($event)">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="switch-item" v-if="isCurrentUserGroupOwner || isCurrentUserGroupAdmin">
+                  <div class="label"><span>普通成员可发起接龙</span></div>
+                  <label class="switch">
+                    <input type="checkbox" :checked="allowChainEnabled" @change="handleToggleGroupFeature('allow_chain', $event)">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="switch-item" v-if="isCurrentUserGroupOwner || isCurrentUserGroupAdmin">
+                  <div class="label"><span>普通成员可发起投票</span></div>
+                  <label class="switch">
+                    <input type="checkbox" :checked="allowVoteEnabled" @change="handleToggleGroupFeature('allow_vote', $event)">
+                    <span class="slider round"></span>
+                  </label>
+                </div>
+                <div class="switch-item" v-if="isCurrentUserGroupOwner || isCurrentUserGroupAdmin">
+                  <div class="label"><span>显示成员正在输入</span></div>
+                  <label class="switch">
+                    <input type="checkbox" :checked="showTypingEnabled" @change="handleToggleGroupFeature('show_typing', $event)">
                     <span class="slider round"></span>
                   </label>
                 </div>
@@ -1102,6 +1123,7 @@ import request from '@/utils/request.js';
 import { searchUsers, checkUserBlockStatus, cancelFriendRequest } from '@/api/user.js';
 import { getUserInfo, removeFriend, setFriendRemark, setFriendDisturb } from '@/api/friend.js';
 import { getGroupMembers, getGroupInfo, createGroup, setGroupRemark, updateGroupName, setGroupNickname, getGroupNickname, updateGroupDescription, removeGroupMember, setGroupAdmin, muteGroupMember, unmuteGroupMember, setAllMute, getGroupMuteStatus, dissolveGroup, leaveGroup, addGroupMembers, setGroupDisturb } from '@/api/group.js';
+import { getGroupFeatureSettings, updateGroupFeatureSettings } from '@/api/groupFeatures.js';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || '';
 
@@ -1871,6 +1893,8 @@ async function loadGroupMembers(groupId) {
       
       // 加载禁言状态
       loadGroupMuteStatus(groupId);
+      // 加载接龙/投票发起开关状态
+      loadGroupFeatureSettings(groupId);
     }
   } catch (error) {
     console.error('加载群组成员失败:', error);
@@ -1917,7 +1941,7 @@ const membersWithMuteStatus = computed(() => {
     if (member.isPermanentMuted) {
       return {
         ...member,
-        muteStatusText: '🔒 永久禁言',
+        muteStatusText: '永久禁言',
         isPermanentMute: true
       };
     }
@@ -1926,7 +1950,7 @@ const membersWithMuteStatus = computed(() => {
     if (member.muted_until && isPermanentMute(member.muted_until)) {
       return {
         ...member,
-        muteStatusText: '🔒 永久禁言',
+        muteStatusText: '永久禁言',
         isPermanentMute: true
       };
     }
@@ -1957,7 +1981,7 @@ const membersWithMuteStatus = computed(() => {
     const timeStr = formatMuteTimeWithNow(mutedTime, now);
     return {
       ...member,
-      muteStatusText: `⏰ ${timeStr}`,
+      muteStatusText: timeStr,
       isPermanentMute: false
     };
   });
@@ -2494,7 +2518,7 @@ async function handleMuteGroupMember(member) {
     { label: '7天', value: 10080 },
     { label: '30天', value: 43200 },
     { label: '永久禁言', value: 0 },
-    { label: '⏰ 自定义时间...', value: -1 }
+    { label: '自定义时间...', value: -1 }
   ];
   
   const durationText = await modal.select(
@@ -2670,7 +2694,7 @@ async function showCustomMuteTimePicker(member) {
           "
         />
         <p id="timeWarning" style="color: #ff4757; font-size: 12px; margin-top: 8px; display: none;">
-          ⚠️ 超过100年将自动设置为永久禁言
+          <i class="fas fa-triangle-exclamation" aria-hidden="true"></i> 超过100年将自动设置为永久禁言
         </p>
       </div>
       <div style="display: flex; gap: 12px;">
@@ -2913,7 +2937,7 @@ function getMuteStatusText(member) {
   
   // 使用 isPermanentMute 函数检测（支持超过100年自动判断）
   if (isPermanentMute(member.muted_until) || member.isPermanentMuted) {
-    return '🔒 永久禁言';
+    return '永久禁言';
   }
   
   // 如果有截止时间，检查是否已过期
@@ -2928,7 +2952,7 @@ function getMuteStatusText(member) {
     }
     
     const timeStr = formatMuteTime(mutedTime, Date.now() + serverTimeOffset.value);
-    return `⏰ ${timeStr}`;
+    return timeStr;
   }
   
   return '已禁言';
@@ -2958,6 +2982,58 @@ function getMuteStatusTooltip(member) {
 }
 
 const isMuteAllEnabled = ref(false);
+
+// ---------------------------------------------------------------- 群功能开关（接龙/投票）
+
+const allowChainEnabled = ref(true);
+const allowVoteEnabled = ref(true);
+const showTypingEnabled = ref(false);
+
+async function loadGroupFeatureSettings(groupId) {
+  if (!groupId) return;
+  try {
+    const response = await getGroupFeatureSettings(groupId);
+    const data = response?.data ?? response ?? {};
+    const settings = data.settings || {};
+    // 仅群主/管理员可改；读接口对普通成员也开放，这里照实回显
+    allowChainEnabled.value = settings.allowChain !== false;
+    allowVoteEnabled.value = settings.allowVote !== false;
+    // 群级 typing 广播开关建表默认 0（关闭），按实际值回显
+    showTypingEnabled.value = settings.showTyping === true;
+  } catch (error) {
+    // 拉取失败保持默认开启态，切换时由后端 403 兜底
+    console.error('获取群功能开关失败:', error);
+  }
+}
+
+async function handleToggleGroupFeature(field, event) {
+  const groupId = modalStore.modalData.groupInfo?.id;
+  const nextEnabled = event?.target?.checked;
+  if (!groupId || nextEnabled === undefined) return;
+
+  const isChain = field === 'allow_chain';
+  const isVote = field === 'allow_vote';
+  try {
+    const response = await updateGroupFeatureSettings(Number(groupId), {
+      allowChain: isChain ? nextEnabled : undefined,
+      allowVote: isVote ? nextEnabled : undefined,
+      showTyping: field === 'show_typing' ? nextEnabled : undefined
+    });
+    const data = response?.data ?? response ?? {};
+    const settings = data.settings || {};
+    if (settings.allowChain !== undefined) allowChainEnabled.value = settings.allowChain !== false;
+    if (settings.allowVote !== undefined) allowVoteEnabled.value = settings.allowVote !== false;
+    if (settings.showTyping !== undefined) showTypingEnabled.value = settings.showTyping === true;
+    const featureName = isChain ? '普通成员发起接龙' : isVote ? '普通成员发起投票' : '显示成员正在输入';
+    toast.success(`已${nextEnabled ? '开启' : '关闭'}${featureName}`);
+  } catch (error) {
+    // 失败时回滚开关显示状态
+    if (event?.target) event.target.checked = !nextEnabled;
+    console.error('修改群功能开关失败:', error);
+    const errorMessage = error.response?.data?.message || error.message || '修改失败';
+    toast.error(errorMessage);
+  }
+}
 
 async function handleToggleMuteAll(event) {
   const action = isMuteAllEnabled.value ? '关闭' : '开启';

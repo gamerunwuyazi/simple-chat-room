@@ -12,7 +12,7 @@
  </div>
  <!-- 引用文件 -->
  <div v-else-if="isFile" class="quoted-preview-section">
- <span class="quoted-preview-file-icon">{{ fileIcon }}</span>
+ <span class="quoted-preview-file-icon"><i class="fas" :class="fileIcon" aria-hidden="true"></i></span>
  <span class="quoted-preview-file-name">{{ displayFilename }}</span>
  </div>
  <!-- 引用群名片 -->
@@ -56,6 +56,7 @@ import { useUnifiedStore } from '@/stores/unifiedStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useMessageHighlight } from '@/composables/useMessageHighlight';
 import { findUserInfo } from '@/utils/chat/userLookup';
+import { getFileIconClass } from '@/utils/fileIcon';
 
 const props = defineProps({
  quotedMessage: {
@@ -138,33 +139,7 @@ const filename = computed(() => {
 
 const displayFilename = computed(() => filename.value || '文件');
 
-const fileIcon = computed(() => {
- if (!filename.value) return '📄';
- const ext = filename.value.split('.').pop()?.toLowerCase() || '';
- const extIcons = {
- pdf: '📕',
- doc: '📘',
- docx: '📘',
- xls: '📗',
- xlsx: '📗',
- ppt: '📙',
- pptx: '📙',
- zip: '📦',
- rar: '📦',
- '7z': '📦',
- mp3: '🎵',
- mp4: '🎬',
- avi: '🎬',
- mov: '🎬',
- jpg: '🖼️',
- jpeg: '🖼️',
- png: '🖼️',
- gif: '🖼️',
- bmp: '🖼️',
- webp: '🖼️'
- };
- return extIcons[ext] || '📄';
-});
+const fileIcon = computed(() => getFileIconClass(filename.value));
 
 const groupCardData = computed(() => {
  const msg = props.quotedMessage;

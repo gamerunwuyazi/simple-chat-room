@@ -302,6 +302,15 @@ function saveCurrentPanelDraft() {
   color: #1e293b;
 }
 
+/* 深色模式：hover 下提示文字保持可读（默认灰、hover 提亮） */
+body.dark-mode .menu-label {
+  color: #8b949e;
+}
+
+body.dark-mode .menu-item:hover .menu-label {
+  color: #c9d1d9;
+}
+
 .menu-item.active .menu-label {
   color: white;
 }

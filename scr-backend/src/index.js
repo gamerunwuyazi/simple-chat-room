@@ -8,12 +8,14 @@ import { hostname } from 'os';
 import cors from 'cors';
 import schedule from 'node-schedule';
 import { pool, redisClient } from './models/database.js';
+import { resolveDbLimits, startInstanceHeartbeat, deregisterInstance } from './config/poolBudget.js';
 import { validateIPAndSession, isIPBanned, getUserSession, checkRateLimit } from './middleware/auth.js';
 import { notFoundHandler, globalErrorHandler } from './middleware/errorHandler.js';
 import { setupAllRoutes } from './routes/index.js';
 import { setupSocketIO } from './socket/index.js';
 import { cleanupExpiredBackups } from './services/favoriteBackupService.js';
 import { setSocketDependencies as setGroupDeps, isGroupAdmin } from './services/groupService.js';
+import { setGroupFeatureDeps } from './services/groupFeatureService.js';
 import { setSocketDependencies as setMessageDeps, getGlobalMessages, getGroupMessages } from './services/messageService.js';
 import { initUserService } from './services/userService.js';
 import { initFileService } from './services/fileService.js';
@@ -149,6 +151,7 @@ const onlineUserManager = {
 };
 
 setGroupDeps(io, onlineUserManager.getAllOnlineUsers, broadcastProducer);
+setGroupFeatureDeps(broadcastProducer);
 setMessageDeps(io, undefined, undefined, broadcastProducer);
 
 initUserService({ io, broadcastProducer });
@@ -173,6 +176,7 @@ async function initializeDatabase() {
         last_online TIMESTAMP NULL DEFAULT NULL,
         created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
         friend_verification TINYINT(1) DEFAULT 0 COMMENT '好友验证开关',
+        show_typing TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许发送"正在输入"状态: 0=否, 1=是',
         UNIQUE KEY username (username),
         INDEX username_index (username),
         INDEX last_online_index (last_online),
@@ -228,6 +232,9 @@ async function initializeDatabase() {
         creator_id INT NOT NULL,
         avatar_url VARCHAR(500) DEFAULT NULL,
         is_mute_all TINYINT(1) DEFAULT 0 COMMENT '是否全员禁言: 0=不禁言, 1=全员禁言',
+        allow_chain TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许普通成员发起接龙: 0=否, 1=是（群主/管理员不受限）',
+        allow_vote TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许普通成员发起投票: 0=否, 1=是（群主/管理员不受限）',
+        show_typing TINYINT(1) NOT NULL DEFAULT 0 COMMENT '群内是否广播"正在输入": 0=否, 1=是',
         created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
         deleted_at DATETIME DEFAULT NULL,
         INDEX creator_id_index (creator_id),
@@ -257,6 +264,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS scr_private_messages (
         id INT AUTO_INCREMENT PRIMARY KEY,
         sender_id INT NOT NULL,
+        client_msg_id VARCHAR(64) DEFAULT NULL COMMENT '客户端消息ID：重发幂等键（同一发送者唯一）',
         receiver_id INT NOT NULL,
         content TEXT,
         at_userid TEXT,
@@ -265,6 +273,7 @@ async function initializeDatabase() {
         timestamp TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (sender_id) REFERENCES scr_users(id) ON DELETE CASCADE,
         FOREIGN KEY (receiver_id) REFERENCES scr_users(id) ON DELETE CASCADE,
+        UNIQUE KEY unique_private_client_msg (sender_id, client_msg_id),
         INDEX idx_private_messages_sender_receiver (sender_id, receiver_id),
         INDEX idx_private_messages_receiver_sender (receiver_id, sender_id),
         INDEX idx_private_messages_timestamp (timestamp)
@@ -280,9 +289,11 @@ async function initializeDatabase() {
         group_id INT DEFAULT NULL,
         timestamp TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
         at_userid TEXT,
+        client_msg_id VARCHAR(64) DEFAULT NULL COMMENT '客户端消息ID：重发幂等键（同一用户唯一）',
         INDEX user_id_index (user_id),
         INDEX group_id_index (group_id),
         INDEX idx_group_id_sequence (group_id),
+        UNIQUE KEY unique_messages_client_msg (user_id, client_msg_id),
         FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
@@ -302,6 +313,84 @@ async function initializeDatabase() {
         INDEX group_id_index (group_id),
         INDEX user_id_index (user_id),
         FOREIGN KEY (group_id) REFERENCES scr_groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // 群接龙：一条接龙 = 表头 + 若干条参与者条目（一人一条，唯一约束保证不重复接）
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_group_chains (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        group_id INT DEFAULT NULL COMMENT '所属群组；NULL=公共聊天室',
+        creator_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        content TEXT,
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        closed_at DATETIME DEFAULT NULL COMMENT 'NULL=进行中，非 NULL=已结束',
+        INDEX idx_chains_group (group_id, id),
+        INDEX idx_chains_creator (creator_id),
+        FOREIGN KEY (group_id) REFERENCES scr_groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (creator_id) REFERENCES scr_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_group_chain_entries (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        chain_id INT NOT NULL,
+        user_id INT NOT NULL,
+        content TEXT,
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_chain_entry (chain_id, user_id),
+        INDEX idx_chain_entries_chain (chain_id, id),
+        FOREIGN KEY (chain_id) REFERENCES scr_group_chains(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // 群投票：status=open/closed；multiple=是否多选；anonymous=是否匿名（不返回投票人明细）
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_group_votes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        group_id INT DEFAULT NULL COMMENT '所属群组；NULL=公共聊天室',
+        creator_id INT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        multiple TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否多选: 0=单选, 1=多选',
+        anonymous TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否匿名: 0=公开, 1=匿名',
+        status VARCHAR(16) NOT NULL DEFAULT 'open' COMMENT 'open/closed',
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        ends_at DATETIME DEFAULT NULL COMMENT 'NULL=不限时',
+        INDEX idx_votes_group (group_id, id),
+        INDEX idx_votes_creator (creator_id),
+        FOREIGN KEY (group_id) REFERENCES scr_groups(id) ON DELETE CASCADE,
+        FOREIGN KEY (creator_id) REFERENCES scr_users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_group_vote_options (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        vote_id INT NOT NULL,
+        label VARCHAR(255) NOT NULL,
+        sort INT NOT NULL DEFAULT 0,
+        INDEX idx_vote_options_vote (vote_id, sort),
+        FOREIGN KEY (vote_id) REFERENCES scr_group_votes(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scr_group_vote_records (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        vote_id INT NOT NULL,
+        option_id INT NOT NULL,
+        user_id INT NOT NULL,
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY unique_vote_record (vote_id, option_id, user_id),
+        INDEX idx_vote_records_vote (vote_id),
+        INDEX idx_vote_records_user (vote_id, user_id),
+        FOREIGN KEY (vote_id) REFERENCES scr_group_votes(id) ON DELETE CASCADE,
+        FOREIGN KEY (option_id) REFERENCES scr_group_vote_options(id) ON DELETE CASCADE,
         FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
@@ -367,18 +456,6 @@ async function initializeDatabase() {
         FOREIGN KEY (user_id) REFERENCES scr_users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
-
-    // 兼容旧表：补 file_url 列（MySQL 8 无 ADD COLUMN IF NOT EXISTS，先查 information_schema）
-    const [fileUrlCol] = await pool.execute(
-      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'scr_favorites' AND COLUMN_NAME = 'file_url'`
-    );
-    if (fileUrlCol.length === 0) {
-      await pool.execute(
-        'ALTER TABLE scr_favorites ADD COLUMN file_url VARCHAR(500) DEFAULT NULL COMMENT \'原文件URL（可用性跟随原文件7天保留期）\' AFTER file_size'
-      );
-      console.log('✅ scr_favorites 已添加 file_url 列');
-    }
 
     // 收藏文件备份：旧设备手动上传 → 新设备 24 小时内取回。
     // 每月最多 3 次（batch 维度），过期后每小时清理。
@@ -553,7 +630,7 @@ async function getOnlineUserCount() {
 async function runOnOneInstance(taskName, ttlSeconds, task) {
   const lockKey = `scr:cron-lock:${taskName}`;
   const lockToken = `${hostname()}:${process.pid}`;
-  let acquired = null;
+  let acquired;
   try {
     acquired = await redisClient.set(lockKey, lockToken, { NX: true, EX: ttlSeconds });
   } catch (err) {
@@ -614,6 +691,14 @@ ____/ /_  / _  / / / / /_  /_/ /  / /  __/    / /__ _  / / / /_/ // /_     _  / 
 
     await initializeDatabase();
     await syncBannedIPsToRedis();
+
+    // 实例心跳：注册表续期 + 存活实例数超预算告警（决策已在模块加载时完成，
+    // 池限额不热改；此处只维持 scr:instances 存活状态，见 config/poolBudget.js）
+    const dbLimits = await resolveDbLimits();
+    startInstanceHeartbeat(redisClient, dbLimits);
+    const deregisterOnExit = () => deregisterInstance(redisClient);
+    process.once('SIGINT', deregisterOnExit);
+    process.once('SIGTERM', deregisterOnExit);
 
     // 启动时立即清理一次日志表（避免上次运行残留的超大日志表拖慢请求），
     // 与每分钟的定时日志清理共用同一把锁，集群内只跑一个实例

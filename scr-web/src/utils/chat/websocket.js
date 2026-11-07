@@ -26,6 +26,8 @@ import {
   getChatSocket
 } from '@/stores/index.js';
 import { refreshTokenWithQueue } from './tokenManager.js';
+import { handleSendAck } from './messageStatus.js';
+import { handleTypingUpdate } from './typing.js';
 import { 
   updateUnreadCountsDisplay, 
   logout
@@ -888,12 +890,20 @@ function initializeWebSocket() {
         }
     });
 
+    // 正在输入：服务端按房间合并推送，客户端 5s 未见新事件即视为停止
+    socket.on('typing-update', (payload) => {
+        handleTypingUpdate(payload);
+    });
+
     // 接收消息发送确认事件 - 根据确认事件渲染消息
     socket.on('message-sent', (data) => {
         const groupStore = useGroupStore();
         const unifiedStore = useUnifiedStore();
         const storageStore = useStorageStore();
         const draftStore = useDraftStore();
+
+        // 按 clientMsgId 收敛本地待发送气泡（sending -> sent/failed）
+        handleSendAck(data);
 
         // 检查是否包含错误（如速率限制）
         if (data.success === false && data.error) {
@@ -2267,6 +2277,9 @@ function initializeWebSocket() {
         const draftStore = useDraftStore();
         const baseStore = useBaseStore();
 
+        // 按 clientMsgId 收敛本地待发送气泡（sending -> sent/failed）
+        handleSendAck(data);
+
         // 检查是否包含错误（如速率限制）
         if (data.success === false && data.error) {
             toast && toast.error(data.error.message || '操作失败');
@@ -3120,6 +3133,23 @@ function sendClearGlobalUnread() {
         userId: currentUser.id,
         sessionToken: currentSessionToken
     });
+}
+
+/**
+ * 给业务组件用的 socket 订阅包装：不需要自己持有 socket 实例，也不会新建连接。
+ * @param {string} event
+ * @param {Function} handler
+ * @returns {Function} 取消订阅
+ */
+export function onSocket(event, handler) {
+  const chatSocket = getChatSocket();
+  if (!chatSocket || typeof chatSocket.on !== 'function') return () => {};
+  chatSocket.on(event, handler);
+  return () => {
+    try {
+      chatSocket.off(event, handler);
+    } catch {}
+  };
 }
 
 export {

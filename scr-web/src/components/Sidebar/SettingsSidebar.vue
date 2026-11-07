@@ -47,6 +47,7 @@ function handleSettingItemClick(settingId) {
                 <li class="settings-item" data-setting-id="friend-verification" @click="handleSettingItemClick('friend-verification')">
                     好友验证
                 </li>
+                <li class="settings-item" data-setting-id="typing-setting" @click="handleSettingItemClick('typing-setting')">正在输入提示</li>
                 <li class="settings-item" data-setting-id="shortcut-settings" @click="handleSettingItemClick('shortcut-settings')">快捷键</li>
                 <li class="settings-item" data-setting-id="clear-unread-counts" @click="handleSettingItemClick('clear-unread-counts')">清除未读计数</li>
             </ul>

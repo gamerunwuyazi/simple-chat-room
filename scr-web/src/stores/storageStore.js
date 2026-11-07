@@ -338,14 +338,14 @@ export const useStorageStore = defineStore('storage', () => {
       if (message.atUserid !== undefined && message.atUserid !== null) {
         const atUserid = Array.isArray(message.atUserid) ? message.atUserid : [message.atUserid];
         if (atUserid.length > 0) {
-          processedMessage.atUserid = atUserid.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
+          processedMessage.atUserid = atUserid.map(id => Number(id)).filter(id => !isNaN(id) && (id === -1 || id > 0));
         }
       }
     } else if (message.type === 'group') {
       if (message.atUserid !== undefined && message.atUserid !== null) {
         const atUserid = Array.isArray(message.atUserid) ? message.atUserid : [message.atUserid];
         if (atUserid.length > 0) {
-          processedMessage.atUserid = atUserid.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
+          processedMessage.atUserid = atUserid.map(id => Number(id)).filter(id => !isNaN(id) && (id === -1 || id > 0));
         }
       }
       processedMessage.groupId = Number(message.groupId);
@@ -626,7 +626,10 @@ export const useStorageStore = defineStore('storage', () => {
 
       if (message.atUserid && baseStore.currentUser && !isWithdrawMessage) {
         const atUserIds = Array.isArray(message.atUserid) ? message.atUserid : [message.atUserid];
-        const isCurrentUserAt = atUserIds.some(id => String(id) === String(baseStore.currentUser.id));
+        // -1 = @全体，语义上对每个成员成立，与在线路径（groupStore/groupChat）口径一致
+        const isCurrentUserAt = atUserIds.some(
+          (id) => String(id) === String(baseStore.currentUser.id) || String(id) === '-1'
+        );
         if (isCurrentUserAt) {
           groupStore.setGroupHasAtMe(groupId);
         }
@@ -1314,9 +1317,11 @@ export const useStorageStore = defineStore('storage', () => {
         } catch {}
       }
       return '[引用]';
-    } else if (msgType === 1) return '[图片]';
+    }     else if (msgType === 1) return '[图片]';
     else if (msgType === 2) return getFileTypePlaceholder(content);
     else if (msgType === 3) return '[群名片]';
+    else if (msgType === 8 || msgType === 9) return '[接龙]';
+    else if (msgType === 10) return '[投票]';
     else if (msgType === 101) return content || '撤回了一条消息';
     else if (message.group_card || message.groupCard) return '[群名片]';
 

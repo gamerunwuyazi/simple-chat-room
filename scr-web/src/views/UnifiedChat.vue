@@ -16,12 +16,21 @@
     </div>
 
     <div id="messageContainer" ref="messageContainerRef">
-      <template v-if="unifiedStore.unifiedMessages.length !== 0">
+      <template v-if="unifiedStore.unifiedMessages.length !== 0 || pendingMessages.length !== 0">
         <UnifiedMessageItem
           v-for="message in unifiedStore.unifiedMessages"
           :key="message.id"
           :message="message"
           :is-own="isOwnMessage(message)"
+        />
+        <PendingBubble
+          v-for="item in pendingMessages"
+          :key="item.clientMsgId"
+          :content="item.content"
+          :message-type="item.messageType"
+          :status="item.status"
+          :error="item.error"
+          @retry="handlePendingRetry(item.clientMsgId)"
         />
       </template>
       <div v-else class="empty-state" id="emptyState">
@@ -30,6 +39,7 @@
       </div>
     </div>
 
+    <TypingIndicator :names="typingNames" />
     <div class="input-area">
       <QuotedMessagePreview v-if="inputStore.quotedMessage" :quoted-message="inputStore.quotedMessage" @close="inputStore.clearQuotedMessage()" />
       <div class="input-container" id="mainInputContainer" 
@@ -83,7 +93,10 @@
       <div class="input-buttons" id="mainInputButtons">
         <button id="sendButton" @click="handleSendMessage">发送</button>
         <button id="moreButton" class="more-button" title="更多功能" @click="toggleMoreFunctions">
-          ⋯ <span class="button-text">更多</span>
+          <i class="fas fa-ellipsis" aria-hidden="true"></i> <span class="button-text">更多</span>
+        </button>
+        <button class="emoji-button" title="表情" @click.stop="showEmoji = !showEmoji">
+          <i class="far fa-smile" aria-hidden="true"></i>
         </button>
         <button class="toggle-btn" 
           @click="toggleMarkdownToolbar">
@@ -108,6 +121,9 @@
         <button id="searchMessageButton" title="查找消息" @click="openSearchModal">
           <i class="fas fa-search"></i> <span class="button-text">查找消息</span>
         </button>
+        <button id="mainCreateVoteButton" title="发起投票" @click="openCreateVote">
+          <i class="fas fa-chart-bar"></i> <span class="button-text">发起投票</span>
+        </button>
       </div>
       <input v-if="showImageInput" type="file" ref="imageInputRef" id="imageInput" style="display: none;" accept="image/*" @change="handleImageUpload" @cancel="handleImageCancel">
       <input v-if="showFileInput" type="file" ref="fileInputRef" id="fileInput" style="display: none;" @change="handleFileUpload" @cancel="handleFileCancel">
@@ -118,15 +134,26 @@
       <div class="upload-progress-bar" id="uploadProgressBar" :style="{ width: inputStore.uploadProgress + '%' }"></div>
     </div>
 
+    <EmojiPanel v-model:visible="showEmoji" @select="insertEmoji" />
+
+    <CreateVoteModal
+      v-model="showCreateVoteModal"
+      :submitting="createVoteSubmitting"
+      @confirm="handleCreateVote"
+    />
+
     <SearchMessageModal
       v-model="showSearchModal"
       :search-results="searchResults"
       :is-searching="isSearching"
       :has-searched="hasSearched"
+      :is-loading-more="isLoadingMore"
+      :has-more="hasMore"
       @search="executeSearch"
       @navigate-prev="navigateToPrevSearchResult"
       @navigate-next="navigateToNextSearchResult"
       @scroll-to-message="scrollToMessage"
+      @load-more="loadMore"
     >
       <template #results="{ results, onClick }">
         <UnifiedMessageItem
@@ -240,7 +267,7 @@
 
 <script setup>
 import localForage from "localforage";
-import { ref, computed, watch, nextTick, onMounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 
 import UnifiedMessageItem from "@/components/MessageItem/UnifiedMessageItem.vue";
@@ -267,9 +294,21 @@ import {
 import { clearContentEditable } from "@/utils/chat/message.js";
 import { useMessageHighlight } from "@/composables/useMessageHighlight";
 import { useSearchNavigation } from "@/composables/useSearchNavigation";
+import { useMessageBrowse } from "@/composables/useMessageBrowse";
 import SearchMessageModal from "@/components/SearchMessageModal.vue";
+import EmojiPanel from "@/components/EmojiPanel.vue";
+import PendingBubble from "@/components/MessageStatus/PendingBubble.vue";
+import TypingIndicator from "@/components/MessageStatus/TypingIndicator.vue";
+import { useMessageStatusStore } from "@/stores/messageStatusStore";
+import { useTypingStore } from "@/stores/typingStore";
+import { notifyTyping, stopTyping, typingSetting } from "@/utils/chat/typing.js";
+import { resend as resendMessage } from "@/utils/chat/messageStatus.js";
 import GroupChat from "@/views/GroupChat.vue";
 import PrivateChat from "@/views/PrivateChat.vue";
+import CreateVoteModal from "@/components/GroupFeature/CreateVoteModal.vue";
+import { useGroupFeatureStore } from "@/stores/groupFeatureStore";
+import { onSocket } from '@/utils/chat/websocket.js';
+import toast from "@/utils/toast";
 
 const baseStore = useBaseStore();
 const userStore = useUserStore();
@@ -296,6 +335,34 @@ const route = useRoute();
 // 切换路由离开再回来时恢复上次打开的面板；嵌入的群聊/私聊组件与专用页面共用同一套会话恢复逻辑
 
 let scrollingInitialized = { public: false };
+
+const messageStatusStore = useMessageStatusStore();
+const typingStore = useTypingStore();
+
+// sendMessage 的群作用域：activeChat 为 'main' 时 groupId 为空
+const activeGroupId = computed(() => {
+  const activeChat = sessionStore.currentActiveChat || 'main';
+  if (activeChat === 'main') return null;
+  return activeChat.startsWith('group_') ? activeChat.replace('group_', '') : activeChat;
+});
+
+// 发送状态按 messageId 交接：真实消息渲染出来之前，气泡不撤（列表刷新也不重置动画）
+const renderedMessageIds = computed(() => unifiedStore.unifiedMessages.map((message) => message.id));
+const pendingMessages = computed(() => (
+  messageStatusStore.listVisible('group', activeGroupId.value, renderedMessageIds.value)
+));
+watch(renderedMessageIds, (ids) => {
+  messageStatusStore.pruneRendered('group', activeGroupId.value, ids);
+});
+const typingNames = computed(() => {
+  // 设置页关掉「显示自己正在输入」后，也不再显示别人的输入提示
+  if (!typingSetting.value) return [];
+  return activeGroupId.value ? typingStore.list('group', activeGroupId.value, baseStore.currentUser?.id) : [];
+});
+
+function handlePendingRetry(clientMsgId) {
+  resendMessage(clientMsgId);
+}
 
 const messageInputRef = ref(null);
 const imageInputRef = ref(null);
@@ -492,7 +559,11 @@ onMounted(() => {
   });
   
   scrollToBottom();
-  
+
+  // 公共聊天室接龙/投票：绑定扇出事件 + 拉取公共列表（groupId=0 → GET /api/chains、/api/votes）
+  bindFeatureSocket();
+  featureStore.hydrate(0).catch(() => {});
+
   setTimeout(() => {
     initializeScrollLoading(true);
   }, 100);
@@ -611,6 +682,74 @@ function toggleMoreFunctions() {
   showMoreFunctions.value = !showMoreFunctions.value;
 }
 
+// ---------------------------------------------------------------- 公共聊天室投票
+// 主聊天室只保留投票（公共接龙已下线）：公共 scope 约定 groupId=0（POST /api/votes，登录即可）
+const featureStore = useGroupFeatureStore();
+const showCreateVoteModal = ref(false);
+const createVoteSubmitting = ref(false);
+
+function openCreateVote() {
+  showMoreFunctions.value = false;
+  showCreateVoteModal.value = true;
+}
+
+async function handleCreateVote(payload) {
+  createVoteSubmitting.value = true;
+  try {
+    await featureStore.createVoteItem(0, payload);
+    showCreateVoteModal.value = false;
+  } catch (e) {
+    toast.error(e?.response?.data?.message || e?.message || '发起投票失败', 2500);
+  } finally {
+    createVoteSubmitting.value = false;
+  }
+}
+
+// 公共聊天室的接龙/投票动态数据：扇出走 authenticated_users 房间（与公共消息一致），
+// 进入面板时 REST 拉一次公共列表，之后由 socket 事件按 chainId/voteId upsert
+const featureSocketEvents = [
+  'message-received',
+  'group-chain-created',
+  'group-chain-updated',
+  'group-vote-created',
+  'group-vote-updated',
+  'vote-closed'
+];
+const featureSocketUnsubs = [];
+
+function bindFeatureSocket() {
+  if (featureSocketUnsubs.length > 0) return;
+  featureSocketEvents.forEach((event) => {
+    featureSocketUnsubs.push(onSocket(event, (payload) => featureStore.applySocketEvent(event, payload)));
+  });
+}
+
+function unbindFeatureSocket() {
+  while (featureSocketUnsubs.length) {
+    const off = featureSocketUnsubs.pop();
+    try {
+      off();
+    } catch (e) {
+      // 忽略解绑异常
+    }
+  }
+}
+
+onUnmounted(() => {
+  unbindFeatureSocket();
+});
+
+
+const showEmoji = ref(false);
+
+function insertEmoji(emoji) {
+  const input = messageInputRef.value;
+  if (!input) return;
+  input.focus();
+  document.execCommand('insertText', false, emoji);
+  handleMessageInput();
+}
+
 function handleMessageInput() {
   if (messageInputRef.value) {
     const input = messageInputRef.value;
@@ -622,8 +761,11 @@ function handleMessageInput() {
       input.innerHTML = '';
       showAtPicker.value = false;
       inputStore.mainMessageInput = '';
+      stopTyping('group', activeGroupId.value);
       return;
     }
+
+    notifyTyping('group', activeGroupId.value);
     
     inputStore.mainMessageInput = input.innerHTML;
     
@@ -784,6 +926,7 @@ function handleMessageInputKeydown(e) {
 
 function handleSendMessage() {
   sendMessage();
+  stopTyping('group', activeGroupId.value);
   scrollToBottom();
 }
 
@@ -1103,9 +1246,18 @@ function handleVideoCancel() {
 
 const showSearchModal = ref(false);
 const searchKeyword = ref('');
-const searchResults = ref([]);
-const isSearching = ref(false);
-const hasSearched = ref(false);
+
+// 查找消息：浏览（无关键词按类型）+ 关键词查找都走后端 /api/messages/browse，
+// 公共聊天室 scope=public，权限边界由后端校验
+const {
+  searchResults,
+  isSearching,
+  hasSearched,
+  isLoadingMore,
+  hasMore,
+  executeSearch: runMessageBrowse,
+  loadMore
+} = useMessageBrowse(() => ({ scope: 'public' }));
 
 function openSearchModal() {
   showSearchModal.value = true;
@@ -1116,60 +1268,45 @@ function closeSearchModal() {
   showSearchModal.value = false;
   searchKeyword.value = '';
   searchResults.value = [];
-  hasSearched.value = false;
 }
 
-async function executeSearch(keyword) {
-  if (!keyword || !keyword.trim()) return;
-  searchKeyword.value = keyword;
-  
-  isSearching.value = true;
-  hasSearched.value = false;
-  searchResults.value = [];
-  
+async function executeSearch(keyword, types = []) {
+  searchKeyword.value = String(keyword || '').trim();
+  await runMessageBrowse(keyword, types);
+  if (!searchKeyword.value) return;
+
+  // 关键词模式：为命中的旧消息补充上下文到主列表，保证点击结果可以跳转定位
   try {
     const prefix = `chats-${baseStore.currentUser?.id || 'guest'}`;
     const storageKey = `${prefix}-public`;
-    
+
     const storageData = await localForage.getItem(storageKey);
     const allMessages = storageData?.messages || [];
-    const keyword = searchKeyword.value.trim().toLowerCase();
-    
-    const matchedMessages = allMessages
-      .filter(msg => {
-        if (msg.messageType === 101 || msg.messageType === 102 || msg.messageType === 103) return false;
-        const content = msg.content?.toLowerCase() || '';
-        const nickname = msg.nickname?.toLowerCase() || '';
-        return content.includes(keyword) || nickname.includes(keyword);
-      });
-    
-    if (matchedMessages.length > 0) {
-      searchResults.value = [...matchedMessages].reverse();
-      
-      const minMatchedId = Math.min(...matchedMessages.map(m => m.id));
-      
-      const storeMessages = unifiedStore.unifiedMessages;
-      if (storeMessages.length > 0) {
-        const storeMinId = Math.min(...storeMessages.map(m => m.id));
-        
-        const startId = Math.max(1, minMatchedId - 20);
-        const endId = storeMinId - 1;
-        
-        if (startId <= endId) {
-          const messagesToAdd = allMessages
-            .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
-            .sort((a, b) => a.id - b.id);
-          
-          unifiedStore.prependUnifiedMessages(messagesToAdd);
-        }
-      }
+    if (allMessages.length === 0 || searchResults.value.length === 0) return;
+
+    const localMatched = searchResults.value.filter(
+      (r) => allMessages.some((m) => m.id === r.id) && r.messageType !== 101 && r.messageType !== 102 && r.messageType !== 103
+    );
+    if (localMatched.length === 0) return;
+
+    const minMatchedId = Math.min(...localMatched.map(m => m.id));
+
+    const storeMessages = unifiedStore.unifiedMessages;
+    if (storeMessages.length === 0) return;
+    const storeMinId = Math.min(...storeMessages.map(m => m.id));
+
+    const startId = Math.max(1, minMatchedId - 20);
+    const endId = storeMinId - 1;
+
+    if (startId <= endId) {
+      const messagesToAdd = allMessages
+        .filter(msg => msg.id >= startId && msg.id <= endId && msg.messageType !== 101 && msg.messageType !== 102 && msg.messageType !== 103)
+        .sort((a, b) => a.id - b.id);
+
+      unifiedStore.prependUnifiedMessages(messagesToAdd);
     }
-    
-    hasSearched.value = true;
   } catch (err) {
-    console.error('搜索失败:', err);
-  } finally {
-    isSearching.value = false;
+    console.error('补充搜索结果上下文失败:', err);
   }
 }
 
